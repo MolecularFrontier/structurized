@@ -4,10 +4,10 @@ structurized
 Modular Java 23 Maven stack for cheminformatics and downstream analytics.
 
 Project coordinates:
-- Parent build: `tech.molecules:structurized:0.1.1-SNAPSHOT`
-- Core module: `tech.molecules:structurized-core:0.1.1-SNAPSHOT`
-- Analytics module: `tech.molecules:structurized-analytics:0.1.1-SNAPSHOT`
-- Workbench module: `tech.molecules:structurized-workbench:0.1.1-SNAPSHOT`
+- Parent build: `tech.molecules:structurized:0.1.1`
+- Core module: `tech.molecules:structurized-core:0.1.1`
+- Analytics module: `tech.molecules:structurized-analytics:0.1.1`
+- Workbench module: `tech.molecules:structurized-workbench:0.1.1`
 
 Build
 -----
