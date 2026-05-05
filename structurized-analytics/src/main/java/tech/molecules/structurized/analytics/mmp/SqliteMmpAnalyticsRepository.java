@@ -99,6 +99,25 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
     }
 
     @Override
+    public List<MmpUniverse> listUniverses() {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select universe_id, name, subject_set_ids, mmp_config_hash, created_at, metadata
+                from mmp_universe
+                order by created_at desc, universe_id asc
+                """)) {
+            ArrayList<MmpUniverse> universes = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    universes.add(readUniverse(rs));
+                }
+            }
+            return List.copyOf(universes);
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to list MMP universes", e);
+        }
+    }
+
+    @Override
     public List<String> listUniverseSubjects(String universeId) {
         try (PreparedStatement ps = connection.prepareStatement("""
                 select subject_id from mmp_universe_subject
@@ -248,6 +267,26 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
     }
 
     @Override
+    public List<MmpEndpointStatsRun> listStatsRuns() {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select run_id, endpoint_id, endpoint_subject_set_id, universe_id, mmp_config_hash,
+                       stats_config_hash, created_at, subject_count, value_count, pair_count, stats_count, metadata
+                from mmp_endpoint_stats_run
+                order by created_at desc, run_id asc
+                """)) {
+            ArrayList<MmpEndpointStatsRun> runs = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    runs.add(readStatsRun(rs));
+                }
+            }
+            return List.copyOf(runs);
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to list MMP stats runs", e);
+        }
+    }
+
+    @Override
     public List<MmpTransformStats> listTransformStats(String runId) {
         try (PreparedStatement ps = connection.prepareStatement("""
                 select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
@@ -281,6 +320,34 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         } catch (SQLException e) {
             throw new IllegalStateException("failed to list MMP transform stats for run " + runId, e);
         }
+    }
+
+    private static MmpUniverse readUniverse(ResultSet rs) throws SQLException {
+        return new MmpUniverse(
+                rs.getString("universe_id"),
+                rs.getString("name"),
+                splitLines(rs.getString("subject_set_ids")),
+                rs.getString("mmp_config_hash"),
+                Instant.parse(rs.getString("created_at")),
+                rs.getString("metadata")
+        );
+    }
+
+    private static MmpEndpointStatsRun readStatsRun(ResultSet rs) throws SQLException {
+        return new MmpEndpointStatsRun(
+                rs.getString("run_id"),
+                rs.getString("endpoint_id"),
+                rs.getString("endpoint_subject_set_id"),
+                rs.getString("universe_id"),
+                rs.getString("mmp_config_hash"),
+                rs.getString("stats_config_hash"),
+                Instant.parse(rs.getString("created_at")),
+                rs.getInt("subject_count"),
+                rs.getInt("value_count"),
+                rs.getInt("pair_count"),
+                rs.getInt("stats_count"),
+                rs.getString("metadata")
+        );
     }
 
     @Override

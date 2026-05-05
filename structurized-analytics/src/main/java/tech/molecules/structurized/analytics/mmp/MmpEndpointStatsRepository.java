@@ -13,5 +13,7 @@ public interface MmpEndpointStatsRepository {
 
     Optional<MmpEndpointStatsRun> findStatsRun(String runId);
 
+    List<MmpEndpointStatsRun> listStatsRuns();
+
     List<MmpTransformStats> listTransformStats(String runId);
 }

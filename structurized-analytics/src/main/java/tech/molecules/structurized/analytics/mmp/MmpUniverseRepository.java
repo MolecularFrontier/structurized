@@ -11,5 +11,7 @@ public interface MmpUniverseRepository {
 
     Optional<MmpUniverse> findUniverse(String universeId);
 
+    List<MmpUniverse> listUniverses();
+
     List<String> listUniverseSubjects(String universeId);
 }

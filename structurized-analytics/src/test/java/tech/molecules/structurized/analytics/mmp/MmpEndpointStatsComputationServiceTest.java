@@ -57,6 +57,8 @@ class MmpEndpointStatsComputationServiceTest {
             assertFalse(repository.listPairs(result.universes().getFirst().universeId()).isEmpty());
             assertEquals(List.of("ethylbenzene", "anisole", "toluene").stream().sorted().toList(),
                     repository.listUniverseSubjects(result.universes().getFirst().universeId()).stream().sorted().toList());
+            assertEquals(1, repository.listUniverses().size());
+            assertEquals(2, repository.listStatsRuns().size());
 
             for (MmpEndpointStatsRun run : result.statsRuns()) {
                 assertTrue(repository.findStatsRun(run.runId()).isPresent());
