@@ -56,6 +56,10 @@ import java.util.Optional;
 public final class MmpWorkbenchPanel extends JPanel {
     private static final String MEASURED_SET_TYPE = "ASSAY_MEASURED";
     private static final String MEASURED_SET_SCOPE = "ASSAYS";
+    private static final String NEON_ENDPOINT_MEASURED_SET_TYPE = "endpoint_measured_subjects";
+    private static final String NEON_ENDPOINT_MEASURED_SET_SCOPE = "neon2-prism";
+    private static final String NEON_ENDPOINT_PREFIX = "/prism/endpoints/";
+    private static final String NEON_ENDPOINT_SUFFIX = "/measured-subjects";
 
     private final EndpointSetupTableModel endpointModel = new EndpointSetupTableModel();
     private final JTable endpointTable = new JTable(endpointModel);
@@ -381,6 +385,7 @@ public final class MmpWorkbenchPanel extends JPanel {
     private static Optional<String> inferSubjectSetId(EndpointDefinition endpoint, List<SubjectSet> subjectSets) {
         List<String> candidates = List.of(
                 endpoint.getId(),
+                NEON_ENDPOINT_PREFIX + endpoint.getId() + NEON_ENDPOINT_SUFFIX,
                 "assay:" + endpoint.getId() + ":measured",
                 "assay-measured:" + endpoint.getId(),
                 "endpoint:" + endpoint.getId() + ":measured",
@@ -395,12 +400,18 @@ public final class MmpWorkbenchPanel extends JPanel {
             }
         }
         return subjectSets.stream()
-                .filter(set -> MEASURED_SET_TYPE.equals(set.getSetType()))
-                .filter(set -> MEASURED_SET_SCOPE.equals(set.getSubjectSetScope()))
+                .filter(MmpWorkbenchPanel::isMeasuredSubjectSet)
                 .filter(set -> containsIgnoreCase(set.getId(), endpoint.getId())
                         || containsIgnoreCase(set.getName(), endpoint.getName()))
                 .map(SubjectSet::getId)
                 .findFirst();
+    }
+
+    private static boolean isMeasuredSubjectSet(SubjectSet subjectSet) {
+        return (MEASURED_SET_TYPE.equals(subjectSet.getSetType())
+                && MEASURED_SET_SCOPE.equals(subjectSet.getSubjectSetScope()))
+                || (NEON_ENDPOINT_MEASURED_SET_TYPE.equals(subjectSet.getSetType())
+                && NEON_ENDPOINT_MEASURED_SET_SCOPE.equals(subjectSet.getSubjectSetScope()));
     }
 
     private static boolean isNumeric(EndpointDefinition endpoint) {

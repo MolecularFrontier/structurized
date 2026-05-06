@@ -23,7 +23,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MmpWorkbenchPanelTest {
     @Test
     void preflightEnablesRunForMappedNumericEndpoint(@TempDir Path tempDir) throws Exception {
-        InMemoryPrismDataset dataset = dataset();
+        InMemoryPrismDataset dataset = dataset("assay:ic50:measured", "ASSAY_MEASURED", "ASSAYS");
+        MmpWorkbenchPanel panel = panelFor(tempDir, dataset);
+
+        assertTrue(panel.isRunEnabled());
+        assertTrue(panel.getPreflightText().contains("Selected endpoints: 1"));
+        assertTrue(panel.getPreflightText().contains("Subjects with parsed structures: 2"));
+    }
+
+    @Test
+    void preflightInfersNeonEndpointMeasuredSubjectSet(@TempDir Path tempDir) throws Exception {
+        InMemoryPrismDataset dataset = dataset(
+                "/prism/endpoints/ic50/measured-subjects",
+                "endpoint_measured_subjects",
+                "neon2-prism"
+        );
+        MmpWorkbenchPanel panel = panelFor(tempDir, dataset);
+
+        assertTrue(panel.isRunEnabled());
+        assertTrue(panel.getPreflightText().contains("ic50 -> /prism/endpoints/ic50/measured-subjects subjects=2"));
+    }
+
+    private static MmpWorkbenchPanel panelFor(Path tempDir, InMemoryPrismDataset dataset) throws Exception {
         AtomicReference<MmpWorkbenchPanel> panelRef = new AtomicReference<>();
         SwingUtilities.invokeAndWait(() -> {
             MmpWorkbenchPanel panel = new MmpWorkbenchPanel();
@@ -31,15 +52,10 @@ class MmpWorkbenchPanelTest {
             panel.setDatabasePath(tempDir.resolve("mmp.db"));
             panelRef.set(panel);
         });
-
-        MmpWorkbenchPanel panel = panelRef.get();
-        assertTrue(panel.isRunEnabled());
-        assertTrue(panel.getPreflightText().contains("Selected endpoints: 1"));
-        assertTrue(panel.getPreflightText().contains("Subjects with parsed structures: 2"));
+        return panelRef.get();
     }
 
-    private static InMemoryPrismDataset dataset() {
-        String setId = "assay:ic50:measured";
+    private static InMemoryPrismDataset dataset(String setId, String setType, String scope) {
         return InMemoryPrismDataset.builder()
                 .addEndpointDefinition(EndpointDefinition.builder()
                         .id("ic50")
@@ -54,8 +70,8 @@ class MmpWorkbenchPanelTest {
                 .addSubjectSet(SubjectSet.builder()
                         .id(setId)
                         .name("IC50 measured")
-                        .setType("ASSAY_MEASURED")
-                        .subjectSetScope("ASSAYS")
+                        .setType(setType)
+                        .subjectSetScope(scope)
                         .build())
                 .addSubjectMembership(setId, "cmp-1")
                 .addSubjectMembership(setId, "cmp-2")
