@@ -6,13 +6,13 @@ import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsConfig;
 import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsRun;
 import tech.molecules.structurized.analytics.mmp.MmpUniverseMode;
 import tech.molecules.structurized.analytics.mmp.SqliteMmpAnalyticsRepository;
+import tech.molecules.structurized.analytics.mmp.StructureProvider;
 import tech.molecules.structurized.mmp.MmpMiningConfig;
 import tech.molecules.structurized.mmp.MmpPair;
 import tech.molecules.structurized.mmp.MmpTransformStats;
 import tech.molecules.structurized.prism.model.EndpointDataType;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.provider.SubjectSet;
-import tech.molecules.structurized.workbench.model.PrismStructureProvider;
 import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
 
 import javax.swing.BorderFactory;
@@ -74,7 +74,7 @@ public final class MmpWorkbenchPanel extends JPanel {
     private final JSpinner minSupportSpinner = new JSpinner(new SpinnerNumberModel(2, 1, 1000, 1));
 
     private PrismWorkbenchModel model;
-    private PrismStructureProvider structureProvider;
+    private StructureProvider structureProvider;
     private Path databasePath;
 
     public MmpWorkbenchPanel() {
@@ -98,7 +98,7 @@ public final class MmpWorkbenchPanel extends JPanel {
         });
     }
 
-    public void setModel(PrismWorkbenchModel model, PrismStructureProvider structureProvider) {
+    public void setModel(PrismWorkbenchModel model, StructureProvider structureProvider) {
         this.model = model;
         this.structureProvider = structureProvider;
         endpointModel.setRows(buildEndpointRows(model));
@@ -258,12 +258,11 @@ public final class MmpWorkbenchPanel extends JPanel {
                     .append(" subjects=").append(subjects.size()).append('\n');
         }
 
-        long structuralSubjects = unionSubjects.stream().filter(structureProvider.structureSubjectIds()::contains).count();
+        long structuralSubjects = structureProvider.fetchStructures(unionSubjects).size();
         long missingStructures = unionSubjects.size() - structuralSubjects;
         message.append("Union subjects: ").append(unionSubjects.size()).append('\n');
         message.append("Subjects with parsed structures: ").append(structuralSubjects).append('\n');
         message.append("Missing structures in selected sets: ").append(missingStructures).append('\n');
-        message.append("Repository structure parse errors: ").append(structureProvider.parseErrorsBySubjectId().size()).append('\n');
         message.append("Database: ").append(databasePath).append('\n');
         if (!problems.isEmpty()) {
             message.append("Problems:\n");

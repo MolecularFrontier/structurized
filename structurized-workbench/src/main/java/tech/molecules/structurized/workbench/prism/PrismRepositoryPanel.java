@@ -7,6 +7,7 @@ import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
 import tech.molecules.structurized.workbench.model.NumericEndpointAnalysis;
 import tech.molecules.structurized.workbench.model.PrismStructureProvider;
 import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
+import tech.molecules.structurized.workbench.model.PrismWorkbenchRepositorySnapshot;
 
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
@@ -33,7 +34,7 @@ public final class PrismRepositoryPanel extends JPanel {
     private final MmpWorkbenchPanel mmpWorkbenchPanel = new MmpWorkbenchPanel();
     private final JLabel statusLabel = new JLabel("No repository loaded");
     private PrismWorkbenchModel model;
-    private PrismStructureProvider structureProvider;
+    private tech.molecules.structurized.analytics.mmp.StructureProvider structureProvider;
 
     public PrismRepositoryPanel() {
         super(new BorderLayout(8, 8));
@@ -59,16 +60,21 @@ public final class PrismRepositoryPanel extends JPanel {
 
     public void loadRepository(Path directory) throws IOException {
         InMemoryPrismDataset dataset = PrismTsvDatasetLoader.load(directory);
-        setRepository(directory, dataset);
+        loadRepositorySnapshot(new PrismWorkbenchRepositorySnapshot(
+                directory.toString(),
+                dataset,
+                PrismStructureProvider.from(dataset)
+        ));
     }
 
-    private void setRepository(Path directory, InMemoryPrismDataset dataset) {
-        model = PrismWorkbenchModel.of(directory, dataset);
-        structureProvider = PrismStructureProvider.from(dataset);
+    public void loadRepositorySnapshot(PrismWorkbenchRepositorySnapshot snapshot) {
+        model = PrismWorkbenchModel.of(snapshot);
+        structureProvider = snapshot.structureProvider();
         refreshPanels();
-        statusLabel.setText("Loaded " + directory + " | endpoints=" + dataset.getEndpointDefinitions().size()
-                + " subjects=" + dataset.getSubjectRecords().size()
-                + " structureParseErrors=" + structureProvider.parseErrorsBySubjectId().size());
+        statusLabel.setText("Loaded " + snapshot.displayName()
+                + " | endpoints=" + snapshot.dataset().getEndpointDefinitions().size()
+                + " subjects=" + snapshot.dataset().getSubjectRecords().size()
+                + " structures=" + structureProvider.fetchStructures(model.selectedSubjectIds()).size());
     }
 
     public PrismWorkbenchModel getModel() {
@@ -112,7 +118,11 @@ public final class PrismRepositoryPanel extends JPanel {
                     return;
                 }
                 try {
-                    setRepository(directory, get());
+                    loadRepositorySnapshot(new PrismWorkbenchRepositorySnapshot(
+                            directory.toString(),
+                            get(),
+                            PrismStructureProvider.from(get())
+                    ));
                 } catch (Exception e) {
                     statusLabel.setText("Load failed: " + e.getMessage());
                 }

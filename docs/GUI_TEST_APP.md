@@ -1,8 +1,49 @@
-# GUI Test App
+# GUI Test Apps
+
+## A/B transformation debugger
+
+`PairTransformationSwingApp` is a minimal internal Swing frontend for inspecting the pairwise
+strict-MCS transformation split.
+
+Entry point:
+
+- `tech.molecules.structurized.gui.PairTransformationSwingApp`
+
+Launch command:
+
+```bash
+mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp
+```
+
+The window contains:
+
+- two OpenChemLib structure editors for molecule A and molecule B
+- optional SMILES text fields for quick loading
+- a context-radius spinner
+- an `Allow non-strict MCS` checkbox for falling back to the first MCS mapping when no mapping
+  satisfies strict atom/bond identity checks
+- a `Debug` tab with the shared MCS core, independent `TransformationGroup` table, selected
+  removed/added/context depictions, and raw signature details
+- a `Visual` tab with the shared scaffold and only the difference-relevant scaffold atoms highlighted
+- a visual transformation list showing every `from A -> in B` fragment pair at once, with compact
+  metadata beside each graphical transformation
+
+The computation path is:
+
+1. compute an A-to-B MCS with `OclStrictMcsProvider`
+2. split the pair with `TransformationSplitter.splitIntoTransformations(...)`
+3. render each resulting `TransformationGroup` and its `TransformationSignature`
+
+By default the app requires strict mappings. If relaxed mode is enabled and no strict mapping is
+found, the app ranks the available MCS-to-A and MCS-to-B mapping pairs by ring-bond coverage,
+preferring mappings that preserve more ring bonds on both sides. It then uses the best-ranked
+non-strict mapping and displays a warning. This is intended as a diagnostic/debug view: differences
+inside the non-strict mapped core are not represented as outside-core transformation groups.
 
 ## Purpose
 
-This is a minimal internal Swing GUI for validating scaffold discovery on real datasets.
+`ScaffoldDiscoverySwingApp` is a minimal internal Swing GUI for validating scaffold discovery on
+real datasets.
 
 It is not intended to be the final user-facing chemistry GUI. Its purpose is:
 

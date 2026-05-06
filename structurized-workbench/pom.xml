@@ -7,7 +7,7 @@
     <parent>
         <groupId>tech.molecules</groupId>
         <artifactId>structurized</artifactId>
-        <version>0.1.1</version>
+        <version>0.1.2-SNAPSHOT</version>
     </parent>
 
     <artifactId>structurized-workbench</artifactId>
@@ -29,7 +29,7 @@
         <dependency>
             <groupId>tech.molecules</groupId>
             <artifactId>prism-core</artifactId>
-            <version>0.1.3</version>
+            <version>0.1.4-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.knowm.xchart</groupId>

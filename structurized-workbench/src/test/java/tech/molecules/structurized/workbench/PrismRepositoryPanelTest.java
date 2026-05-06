@@ -2,11 +2,19 @@ package tech.molecules.structurized.workbench;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tech.molecules.structurized.prism.model.EndpointDataType;
+import tech.molecules.structurized.prism.model.EndpointDefinition;
+import tech.molecules.structurized.prism.model.EndpointType;
+import tech.molecules.structurized.prism.model.EvaluationMode;
+import tech.molecules.structurized.prism.provider.SubjectRecord;
+import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
+import tech.molecules.structurized.workbench.model.PrismWorkbenchRepositorySnapshot;
 import tech.molecules.structurized.workbench.prism.PrismRepositoryPanel;
 
 import javax.swing.SwingUtilities;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,6 +40,40 @@ class PrismRepositoryPanelTest {
         assertNotNull(panel.getModel());
         assertEquals(1, panel.getModel().dataset().getEndpointDefinitions().size());
         assertEquals(2, panel.getModel().dataset().getSubjectRecords().size());
+    }
+
+    @Test
+    void loadsRepositorySnapshotDirectly() throws Exception {
+        InMemoryPrismDataset dataset = InMemoryPrismDataset.builder()
+                .addEndpointDefinition(EndpointDefinition.builder()
+                        .id("ic50")
+                        .name("IC50")
+                        .path("assay/ic50")
+                        .datatype(EndpointDataType.NUMERIC)
+                        .endpointType(EndpointType.MEASURED)
+                        .evaluationMode(EvaluationMode.IMMEDIATE)
+                        .build())
+                .addSubjectRecord(SubjectRecord.builder()
+                        .subjectId("cmp-1")
+                        .build())
+                .build();
+
+        AtomicReference<PrismRepositoryPanel> panelRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            PrismRepositoryPanel panel = new PrismRepositoryPanel();
+            panel.loadRepositorySnapshot(new PrismWorkbenchRepositorySnapshot(
+                    "direct snapshot",
+                    dataset,
+                    subjectId -> Optional.empty()
+            ));
+            panelRef.set(panel);
+        });
+
+        PrismRepositoryPanel panel = panelRef.get();
+        assertNotNull(panel.getModel());
+        assertEquals("direct snapshot", panel.getModel().displayName());
+        assertEquals(1, panel.getModel().dataset().getEndpointDefinitions().size());
+        assertEquals(1, panel.getModel().dataset().getSubjectRecords().size());
     }
 
     private static void writePrismTsv(Path directory) throws Exception {

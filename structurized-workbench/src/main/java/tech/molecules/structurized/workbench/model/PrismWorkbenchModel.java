@@ -13,25 +13,33 @@ import java.util.Optional;
  * Immutable snapshot of the currently loaded PRISM repository in the workbench.
  */
 public record PrismWorkbenchModel(
+        String displayName,
         Path sourceDirectory,
         InMemoryPrismDataset dataset,
         String selectedEndpointId,
         String selectedSubjectSetId
 ) {
     public PrismWorkbenchModel {
+        displayName = displayName == null || displayName.trim().isEmpty() ? "PRISM repository" : displayName.trim();
         dataset = Objects.requireNonNull(dataset, "dataset");
     }
 
     public static PrismWorkbenchModel of(Path sourceDirectory, InMemoryPrismDataset dataset) {
-        return new PrismWorkbenchModel(sourceDirectory, dataset, null, null);
+        String displayName = sourceDirectory == null ? "PRISM repository" : sourceDirectory.toString();
+        return new PrismWorkbenchModel(displayName, sourceDirectory, dataset, null, null);
+    }
+
+    public static PrismWorkbenchModel of(PrismWorkbenchRepositorySnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        return new PrismWorkbenchModel(snapshot.displayName(), null, snapshot.dataset(), null, null);
     }
 
     public PrismWorkbenchModel withSelectedEndpoint(String endpointId) {
-        return new PrismWorkbenchModel(sourceDirectory, dataset, endpointId, selectedSubjectSetId);
+        return new PrismWorkbenchModel(displayName, sourceDirectory, dataset, endpointId, selectedSubjectSetId);
     }
 
     public PrismWorkbenchModel withSelectedSubjectSet(String subjectSetId) {
-        return new PrismWorkbenchModel(sourceDirectory, dataset, selectedEndpointId, subjectSetId);
+        return new PrismWorkbenchModel(displayName, sourceDirectory, dataset, selectedEndpointId, subjectSetId);
     }
 
     public Optional<EndpointDefinition> selectedEndpoint() {

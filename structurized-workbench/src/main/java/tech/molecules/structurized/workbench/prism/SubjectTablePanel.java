@@ -1,8 +1,8 @@
 package tech.molecules.structurized.workbench.prism;
 
 import com.actelion.research.chem.StereoMolecule;
+import tech.molecules.structurized.analytics.mmp.StructureProvider;
 import tech.molecules.structurized.prism.provider.SubjectRecord;
-import tech.molecules.structurized.workbench.model.PrismStructureProvider;
 import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
 
 import javax.swing.JPanel;
@@ -43,7 +43,7 @@ public final class SubjectTablePanel extends JPanel {
         this.subjectSelectionListener = listener == null ? subjectId -> {} : listener;
     }
 
-    public void setModel(PrismWorkbenchModel model, PrismStructureProvider structureProvider) {
+    public void setModel(PrismWorkbenchModel model, StructureProvider structureProvider) {
         tableModel.setModel(model, structureProvider);
     }
 
@@ -52,7 +52,7 @@ public final class SubjectTablePanel extends JPanel {
         private List<SubjectRecord> subjects = List.of();
         private Map<String, StereoMolecule> structures = Map.of();
 
-        void setModel(PrismWorkbenchModel model, PrismStructureProvider structureProvider) {
+        void setModel(PrismWorkbenchModel model, StructureProvider structureProvider) {
             if (model == null) {
                 subjects = List.of();
                 structures = Map.of();

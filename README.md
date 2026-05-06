@@ -16,6 +16,7 @@ Build
 - `mvn package` – build all modules
 - `mvn test` – run all module tests
 - `mvn -pl structurized-core test` – run core-module tests only
+- `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
 - The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.
 
@@ -57,6 +58,7 @@ Notes
 - Scaffold-mode entry point: `tech.molecules.structurized.scaffolds.ScaffoldAnalyzer`
 - Scaffold discovery entry point: `tech.molecules.structurized.scaffolds.ScaffoldDiscoveryEngine`
 - Internal Swing validation GUI: `tech.molecules.structurized.gui.ScaffoldDiscoverySwingApp`
+- Internal A/B transformation debugger: `tech.molecules.structurized.gui.PairTransformationSwingApp`
 - PRISM now lives in the separate `prism` repository as its own multi-module project
 - `structurized-analytics` is reserved for analytics that combine structural methods with external endpoint/protocol layers
 - `structurized-workbench` contains reusable Swing components, a PRISM repository explorer app, and the first MMP endpoint-statistics workbench
