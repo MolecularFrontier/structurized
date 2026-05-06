@@ -5,8 +5,8 @@ import com.actelion.research.chem.IsomericSmilesCreator;
 import com.actelion.research.chem.Molecule;
 import com.actelion.research.chem.SmilesParser;
 import com.actelion.research.chem.StereoMolecule;
-import com.actelion.research.gui.JDrawPanel;
 import com.actelion.research.gui.JStructureView;
+import com.actelion.research.gui.editor.SwingEditorPanel;
 import tech.molecules.structurized.OpenChemLibUtil;
 import tech.molecules.structurized.transforms.OclStrictMcsProvider;
 import tech.molecules.structurized.transforms.TransformationGroup;
@@ -771,7 +771,7 @@ public final class PairTransformationSwingApp {
     private static final class MoleculeEditorPanel extends JPanel {
         private final String title;
         private final String initialSmiles;
-        private final JDrawPanel drawPanel;
+        private final SwingEditorPanel drawPanel;
         private final JTextField smilesField;
         private final JButton loadSmilesButton;
         private final JButton cleanButton;
@@ -781,7 +781,7 @@ public final class PairTransformationSwingApp {
             super(new BorderLayout(6, 6));
             this.title = title;
             this.initialSmiles = initialSmiles;
-            this.drawPanel = new JDrawPanel(new StereoMolecule());
+            this.drawPanel = new SwingEditorPanel(new StereoMolecule());
             this.smilesField = new JTextField(initialSmiles, 34);
             this.loadSmilesButton = new JButton("Load SMILES");
             this.cleanButton = new JButton("Clean");
@@ -865,7 +865,7 @@ public final class PairTransformationSwingApp {
             cleanButton.setEnabled(enabled);
             clearButton.setEnabled(enabled);
             drawPanel.setEnabled(enabled);
-            drawPanel.getDrawArea().setEnabled(enabled);
+            drawPanel.getSwingDrawArea().setEnabled(enabled);
         }
     }
 

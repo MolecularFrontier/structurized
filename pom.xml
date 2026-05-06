@@ -44,7 +44,7 @@
         <maven.compiler.release>23</maven.compiler.release>
         <maven.compiler.parameters>true</maven.compiler.parameters>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
-        <openchemlib.version>2025.5.1</openchemlib.version>
+        <openchemlib.version>2026.1.1</openchemlib.version>
         <xchart.version>3.8.8</xchart.version>
     </properties>
 
