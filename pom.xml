@@ -35,6 +35,7 @@
 
     <modules>
         <module>structurized-core</module>
+        <module>structurized-ai-core</module>
         <module>structurized-analytics</module>
         <module>structurized-workbench</module>
     </modules>
