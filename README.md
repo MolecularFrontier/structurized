@@ -7,6 +7,7 @@ Project coordinates:
 - Parent build: `tech.molecules:structurized:0.1.3`
 - Core module: `tech.molecules:structurized-core:0.1.3`
 - AI inspection module: `tech.molecules:structurized-ai-core:0.1.3`
+- AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.1.3`
 - Analytics module: `tech.molecules:structurized-analytics:0.1.3`
 - Workbench module: `tech.molecules:structurized-workbench:0.1.3`
 
@@ -18,6 +19,8 @@ Build
 - `mvn test` – run all module tests
 - `mvn -pl structurized-core test` – run core-module tests only
 - `mvn -pl structurized-ai-core -am test` – run the AI inspection module and its dependencies
+- `mvn -pl structurized-ai-mcp -am test` – run the AI MCP adapter and its dependencies
+- `mvn -q -pl structurized-ai-mcp -am exec:java -Dexec.mainClass=tech.molecules.structurized.ai.mcp.McpStdioServer` – launch the stdio MCP adapter
 - `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
 - The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.
@@ -57,6 +60,7 @@ Notes
 - Workbench module POM: [`structurized-workbench/pom.xml`](/home/lithom/dev_chem/structurized/structurized-workbench/pom.xml)
 - Existing cheminformatics implementation now lives in `structurized-core`
 - Addressable AI molecular graph inspection lives in `structurized-ai-core`
+- The stdio MCP adapter for those operations lives in `structurized-ai-mcp`
 - Main pairwise engine: `tech.molecules.structurized.transforms.TransformationSplitter`
 - Scaffold-mode entry point: `tech.molecules.structurized.scaffolds.ScaffoldAnalyzer`
 - Scaffold discovery entry point: `tech.molecules.structurized.scaffolds.ScaffoldDiscoveryEngine`

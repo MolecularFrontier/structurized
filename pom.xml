@@ -36,6 +36,7 @@
     <modules>
         <module>structurized-core</module>
         <module>structurized-ai-core</module>
+        <module>structurized-ai-mcp</module>
         <module>structurized-analytics</module>
         <module>structurized-workbench</module>
     </modules>
@@ -45,6 +46,7 @@
         <maven.compiler.release>23</maven.compiler.release>
         <maven.compiler.parameters>true</maven.compiler.parameters>
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
+        <jackson.version>2.17.1</jackson.version>
         <openchemlib.version>2026.1.1</openchemlib.version>
         <xchart.version>3.8.8</xchart.version>
     </properties>
