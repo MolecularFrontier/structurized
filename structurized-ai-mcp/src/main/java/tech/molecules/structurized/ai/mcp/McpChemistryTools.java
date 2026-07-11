@@ -16,12 +16,17 @@ import tech.molecules.structurized.ai.model.RepositoryRecord;
 import tech.molecules.structurized.ai.model.StructureInspection;
 import tech.molecules.structurized.ai.model.StructureRef;
 import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
+import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
+import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
+import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
+import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.render.CompactStructureRenderer;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 import tech.molecules.structurized.ai.search.OclStructureSearchService;
 import tech.molecules.structurized.ai.search.StructureSearchService;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +38,7 @@ final class McpChemistryTools {
     private final StructureRepositoryService repositories;
     private final StructureInspectionService inspections;
     private final StructureSearchService searches;
+    private final PrismBridgeService prism;
     private final CompactStructureRenderer compactRenderer = new CompactStructureRenderer();
     private final Map<String, ToolHandler> handlers = new LinkedHashMap<>();
     private final List<McpToolDefinition> tools;
@@ -42,6 +48,7 @@ final class McpChemistryTools {
         this.repositories = Objects.requireNonNull(repositories, "repositories");
         this.inspections = new OclStructureInspectionService(repositories);
         this.searches = new OclStructureSearchService(repositories);
+        this.prism = new InMemoryPrismBridgeService(repositories);
         this.tools = List.copyOf(registerTools());
     }
 
@@ -163,6 +170,67 @@ final class McpChemistryTools {
                         optionalInt(args, "max_results", 100),
                         optionalInt(args, "max_matches_per_structure", 1),
                         optionalBoolean(args, "include_atom_mappings", true))));
+        add(result, "open_prism_dataset", "Loads a PRISM TSV bundle as an in-memory dataset session.", schema(
+                required("path"),
+                prop("path", "string", "Path to a PRISM TSV bundle directory."),
+                prop("dataset_id", "string", "Optional dataset ID."),
+                prop("label", "string", "Optional display label.")),
+                args -> prism.openDataset(new OpenPrismDatasetRequest(
+                        Path.of(requiredString(args, "path")),
+                        optionalString(args, "dataset_id", null),
+                        optionalString(args, "label", null))));
+        add(result, "list_prism_datasets", "Lists loaded PRISM dataset sessions.", schema(),
+                args -> prism.listDatasets());
+        add(result, "get_prism_dataset_info", "Returns counts, subject sets, and endpoint summaries for one PRISM dataset.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID.")),
+                args -> prism.getDatasetInfo(requiredString(args, "dataset_id")));
+        add(result, "list_prism_subject_sets", "Lists discoverable PRISM subject sets with subject counts.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID.")),
+                args -> prism.listSubjectSets(requiredString(args, "dataset_id")));
+        add(result, "list_prism_subjects", "Lists PRISM subjects, optionally restricted to a subject set.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                prop("subject_set_id", "string", "Optional subject set ID."),
+                prop("offset", "integer", "Zero-based offset."),
+                prop("limit", "integer", "Maximum records to return."),
+                prop("include_metadata", "boolean", "Whether to include subject metadata.")),
+                args -> prism.listSubjects(
+                        requiredString(args, "dataset_id"),
+                        optionalString(args, "subject_set_id", null),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100),
+                        optionalBoolean(args, "include_metadata", false)));
+        add(result, "get_prism_subject", "Returns one PRISM subject record summary with metadata.", schema(
+                required("dataset_id", "subject_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                prop("subject_id", "string", "PRISM subject ID.")),
+                args -> prism.getSubject(requiredString(args, "dataset_id"), requiredString(args, "subject_id")));
+        add(result, "list_prism_endpoints", "Lists PRISM endpoint definitions and concise endpoint metadata.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID.")),
+                args -> prism.listEndpoints(requiredString(args, "dataset_id")));
+        add(result, "get_prism_endpoint_values", "Fetches PRISM endpoint values for selected subjects and endpoints.", schema(
+                required("dataset_id", "subject_ids", "endpoint_ids"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                arrayProp("subject_ids", "string", "PRISM subject IDs."),
+                arrayProp("endpoint_ids", "string", "PRISM endpoint IDs.")),
+                args -> prism.getEndpointValues(
+                        requiredString(args, "dataset_id"),
+                        stringList(args, "subject_ids"),
+                        stringList(args, "endpoint_ids")));
+        add(result, "materialize_prism_subject_set", "Materializes a PRISM subject set into a normal AI chemistry repository.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                prop("subject_set_id", "string", "Optional PRISM subject set ID. Omit for all subjects."),
+                prop("repository_id", "string", "Optional target AI repository ID."),
+                prop("label", "string", "Optional target repository label.")),
+                args -> prism.materializeSubjectSet(new MaterializePrismSubjectSetRequest(
+                        requiredString(args, "dataset_id"),
+                        optionalString(args, "subject_set_id", null),
+                        optionalString(args, "repository_id", null),
+                        optionalString(args, "label", null))));
         return result;
     }
 

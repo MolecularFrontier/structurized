@@ -10,9 +10,9 @@
         <version>0.1.3</version>
     </parent>
 
-    <artifactId>structurized-ai-mcp</artifactId>
-    <name>structurized-ai-mcp</name>
-    <description>Stdio MCP adapter for addressable AI molecular graph operations</description>
+    <artifactId>structurized-ai-prism</artifactId>
+    <name>structurized-ai-prism</name>
+    <description>Bridge from PRISM datasets to addressable AI chemistry repositories</description>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -23,13 +23,8 @@
         </dependency>
         <dependency>
             <groupId>tech.molecules</groupId>
-            <artifactId>structurized-ai-prism</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
+            <artifactId>prism-core</artifactId>
+            <version>${prism.version}</version>
         </dependency>
 
         <dependency>
