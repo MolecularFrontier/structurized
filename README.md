@@ -22,7 +22,8 @@ Build
 - `mvn -pl structurized-ai-core -am test` – run the AI inspection module and its dependencies
 - `mvn -pl structurized-ai-prism -am test` – run the AI Prism bridge and its dependencies
 - `mvn -pl structurized-ai-mcp -am test` – run the AI MCP adapter and its dependencies
-- `mvn -q -pl structurized-ai-mcp -am exec:java -Dexec.mainClass=tech.molecules.structurized.ai.mcp.McpStdioServer` – launch the stdio MCP adapter
+- `mvn -pl structurized-ai-mcp -am -Dgpg.skip=true -DskipTests package` – build the MCP standalone jar
+- `java -jar structurized-ai-mcp/target/structurized-ai-mcp-0.2.1-standalone.jar` – launch the stdio MCP adapter
 - `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
 - The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.
@@ -76,6 +77,9 @@ Notes
 - Parent-aware context shell spec: `docs/CONTEXT_SHELL_ENCODING.md`
 - Scaffold-mode notes: `docs/SCAFFOLD_MODE.md`
 - Scaffold discovery notes: `docs/SCAFFOLD_DISCOVERY.md`
+- Series decomposition notes: `docs/SERIES_DECOMPOSITION.md`
+- Fast AI clustering notes: `docs/AI_CLUSTERING.md`
+- MCP / Kiro setup notes: `docs/MCP_KIRO_SETUP.md`
 - GUI test app notes: `docs/GUI_TEST_APP.md`
 - Review and project notes: `docs/STRUCTURIZED_REVIEW.md`
 - Verified OpenChemLib usage notes: `docs/OPENCHEMLIB_METHODS.md`

@@ -3,6 +3,8 @@ package tech.molecules.structurized.ai.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import tech.molecules.structurized.ai.clustering.SimilarityClusteringAiService;
+import tech.molecules.structurized.ai.decomposition.DecompositionAiService;
 import tech.molecules.structurized.ai.inspect.OclStructureInspectionService;
 import tech.molecules.structurized.ai.inspect.StructureInspectionService;
 import tech.molecules.structurized.ai.model.AtomRef;
@@ -25,6 +27,7 @@ import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryServ
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 import tech.molecules.structurized.ai.search.OclStructureSearchService;
 import tech.molecules.structurized.ai.search.StructureSearchService;
+import tech.molecules.structurized.decomposition.DecompositionConfig;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,6 +42,8 @@ final class McpChemistryTools {
     private final StructureInspectionService inspections;
     private final StructureSearchService searches;
     private final PrismBridgeService prism;
+    private final SimilarityClusteringAiService clusterings;
+    private final DecompositionAiService decompositions;
     private final CompactStructureRenderer compactRenderer = new CompactStructureRenderer();
     private final Map<String, ToolHandler> handlers = new LinkedHashMap<>();
     private final List<McpToolDefinition> tools;
@@ -49,6 +54,8 @@ final class McpChemistryTools {
         this.inspections = new OclStructureInspectionService(repositories);
         this.searches = new OclStructureSearchService(repositories);
         this.prism = new InMemoryPrismBridgeService(repositories);
+        this.clusterings = new SimilarityClusteringAiService(repositories);
+        this.decompositions = new DecompositionAiService(repositories);
         this.tools = List.copyOf(registerTools());
     }
 
@@ -231,7 +238,130 @@ final class McpChemistryTools {
                         optionalString(args, "subject_set_id", null),
                         optionalString(args, "repository_id", null),
                         optionalString(args, "label", null))));
+        add(result, "cluster_structures", "Runs fast deterministic greedy clustering with OpenChemLib SkelSpheres descriptors.", schema(
+                required("repository_id"),
+                prop("clustering_id", "string", "Optional clustering result ID."),
+                prop("repository_id", "string", "Repository ID to cluster."),
+                arrayProp("structure_ids", "string", "Optional selected structure IDs."),
+                prop("descriptor", "string", "Descriptor name. Default skelspheres."),
+                prop("threshold", "number", "Representative similarity threshold. Default 0.80."),
+                prop("max_cross_neighbors", "integer", "Maximum nearest cross-cluster neighbors per cluster.")),
+                args -> clusterings.clusterStructures(
+                        optionalString(args, "clustering_id", null),
+                        requiredString(args, "repository_id"),
+                        optionalStringList(args, "structure_ids"),
+                        optionalString(args, "descriptor", null),
+                        optionalDouble(args, "threshold", null),
+                        optionalInt(args, "max_cross_neighbors", 5)));
+        add(result, "list_clusterings", "Lists stored rough similarity clustering results.", schema(),
+                args -> clusterings.listClusterings());
+        add(result, "get_clustering", "Returns a clustering summary with paged representative-led cluster summaries.", schema(
+                required("clustering_id"),
+                prop("clustering_id", "string", "Stored clustering ID."),
+                prop("include_singletons", "boolean", "Whether to include singleton cluster summaries."),
+                prop("offset", "integer", "Zero-based cluster offset."),
+                prop("limit", "integer", "Maximum clusters returned.")),
+                args -> clusterings.getClustering(
+                        requiredString(args, "clustering_id"),
+                        optionalBoolean(args, "include_singletons", true),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "get_cluster", "Returns one full similarity cluster with members and nearest cross-cluster neighbors.", schema(
+                required("clustering_id", "cluster_id"),
+                prop("clustering_id", "string", "Stored clustering ID."),
+                prop("cluster_id", "string", "Cluster ID such as cluster_1.")),
+                args -> clusterings.getCluster(
+                        requiredString(args, "clustering_id"),
+                        requiredString(args, "cluster_id")));
+        add(result, "validate_decomposition_config", "Validates a decomposition config JSON object without storing it.", schema(
+                prop("config", "object", "Decomposition config object."),
+                prop("config_json", "string", "Decomposition config JSON string.")),
+                args -> decompositions.validateConfig(decompositionConfig(args)));
+        add(result, "create_decomposition_config", "Stores a session-scoped decomposition config for later evaluation.", schema(
+                prop("config_id", "string", "Optional decomposition config ID."),
+                prop("label", "string", "Optional display label."),
+                prop("config", "object", "Decomposition config object."),
+                prop("config_json", "string", "Decomposition config JSON string.")),
+                args -> decompositions.createConfig(
+                        optionalString(args, "config_id", null),
+                        optionalString(args, "label", null),
+                        decompositionConfig(args)));
+        add(result, "list_decomposition_configs", "Lists stored decomposition config metadata.", schema(),
+                args -> decompositions.listConfigs());
+        add(result, "get_decomposition_config", "Returns a stored decomposition config and metadata.", schema(
+                required("config_id"),
+                prop("config_id", "string", "Stored decomposition config ID."),
+                prop("include_config", "boolean", "Whether to include the full config object.")),
+                args -> decompositions.getConfig(
+                        requiredString(args, "config_id"),
+                        optionalBoolean(args, "include_config", true)));
+        add(result, "evaluate_decomposition", "Evaluates a decomposition config against a repository or selected structures.", schema(
+                required("config_id", "repository_id"),
+                prop("evaluation_id", "string", "Optional evaluation ID."),
+                prop("config_id", "string", "Stored decomposition config ID."),
+                prop("repository_id", "string", "Repository ID to evaluate."),
+                arrayProp("structure_ids", "string", "Optional selected structure IDs.")),
+                args -> decompositions.evaluate(
+                        optionalString(args, "evaluation_id", null),
+                        requiredString(args, "config_id"),
+                        requiredString(args, "repository_id"),
+                        optionalStringList(args, "structure_ids")));
+        add(result, "get_decomposition_evaluation", "Returns decomposition evaluation summary and optional paged molecule results.", schema(
+                required("evaluation_id"),
+                prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
+                prop("include_results", "boolean", "Whether to include molecule summaries."),
+                prop("offset", "integer", "Zero-based result offset."),
+                prop("limit", "integer", "Maximum result count.")),
+                args -> decompositions.getEvaluation(
+                        requiredString(args, "evaluation_id"),
+                        optionalBoolean(args, "include_results", false),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "get_decomposition_result", "Returns one molecule's full decomposition tree with atom IDs, rule attempts, cut bonds, and boundary bonds.", schema(
+                required("evaluation_id", "structure_id"),
+                prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
+                prop("structure_id", "string", "Structure ID inside the evaluated repository.")),
+                args -> decompositions.getResult(
+                        requiredString(args, "evaluation_id"),
+                        requiredString(args, "structure_id")));
+        add(result, "get_decomposition_failures", "Returns non-successful decomposition molecules grouped by status.", schema(
+                required("evaluation_id"),
+                prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
+                prop("offset", "integer", "Zero-based group offset."),
+                prop("limit", "integer", "Maximum result count per group.")),
+                args -> decompositions.getFailures(
+                        requiredString(args, "evaluation_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "get_decomposition_fragment_summary", "Returns terminal path fragment support, distinct counts, singleton counts, and examples.", schema(
+                required("evaluation_id"),
+                prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
+                prop("offset", "integer", "Zero-based summary row offset."),
+                prop("limit", "integer", "Maximum summary rows.")),
+                args -> decompositions.getFragmentSummary(
+                        requiredString(args, "evaluation_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
         return result;
+    }
+
+    private DecompositionConfig decompositionConfig(ObjectNode args) {
+        JsonNode configNode = args.get("config");
+        if (configNode != null && !configNode.isNull()) {
+            if (!configNode.isObject()) {
+                throw new ChemOperationException("invalid_arguments", "Argument config must be an object.");
+            }
+            return mapper.convertValue(configNode, DecompositionConfig.class);
+        }
+        String configJson = optionalString(args, "config_json", null);
+        if (configJson == null || configJson.isBlank()) {
+            throw new ChemOperationException("invalid_arguments", "Either config or config_json is required.");
+        }
+        try {
+            return mapper.readValue(configJson, DecompositionConfig.class);
+        } catch (Exception e) {
+            throw new ChemOperationException("invalid_decomposition_config", "Could not parse decomposition config: " + e.getMessage(), e);
+        }
     }
 
     private Object inspectStructure(ObjectNode args) throws Exception {
@@ -350,6 +480,17 @@ final class McpChemistryTools {
             throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be a boolean.");
         }
         return node.asBoolean();
+    }
+
+    private static Double optionalDouble(ObjectNode args, String name, Double defaultValue) {
+        JsonNode node = args.get(name);
+        if (node == null || node.isNull()) {
+            return defaultValue;
+        }
+        if (!node.isNumber()) {
+            throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be a number.");
+        }
+        return node.asDouble();
     }
 
     private static List<String> optionalStringList(ObjectNode args, String name) {

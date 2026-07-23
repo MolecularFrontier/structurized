@@ -9,19 +9,28 @@ import java.util.List;
 /**
  * Minimal reader for simple SMILES text files.
  *
- * <p>Accepted format is intentionally simple:
- * every non-empty non-comment line contributes the first token as the SMILES string.
- * This supports common .smi files with optional name columns.</p>
+ * <p>Accepted format is intentionally simple: every non-empty non-comment line contributes the
+ * first token as the SMILES string. If a second token exists, it is treated as a molecule ID.</p>
  */
 public final class SmilesInputReader {
     private SmilesInputReader() {}
+
+    public record SmilesRecord(String smiles, String moleculeId) {}
 
     public static List<String> readSmilesFile(Path path) throws IOException {
         return parseSmilesLines(Files.readAllLines(path));
     }
 
+    public static List<SmilesRecord> readSmilesRecords(Path path) throws IOException {
+        return parseSmilesRecords(Files.readAllLines(path));
+    }
+
     static List<String> parseSmilesLines(List<String> lines) {
-        List<String> smiles = new ArrayList<>();
+        return parseSmilesRecords(lines).stream().map(SmilesRecord::smiles).toList();
+    }
+
+    static List<SmilesRecord> parseSmilesRecords(List<String> lines) {
+        List<SmilesRecord> records = new ArrayList<>();
         boolean firstNonEmpty = true;
         for (String rawLine : lines) {
             if (rawLine == null) {
@@ -32,31 +41,40 @@ public final class SmilesInputReader {
                 continue;
             }
 
-            String firstToken = firstToken(line);
-            if (firstToken.isEmpty()) {
+            List<String> tokens = tokens(line);
+            if (tokens.isEmpty()) {
                 continue;
             }
 
-            if (firstNonEmpty && firstToken.equalsIgnoreCase("smiles")) {
+            if (firstNonEmpty && tokens.getFirst().equalsIgnoreCase("smiles")) {
                 firstNonEmpty = false;
                 continue;
             }
 
             firstNonEmpty = false;
-            smiles.add(firstToken);
+            String moleculeId = tokens.size() > 1 ? tokens.get(1) : null;
+            records.add(new SmilesRecord(tokens.getFirst(), moleculeId));
         }
-        return smiles;
+        return List.copyOf(records);
     }
 
-    private static String firstToken(String line) {
-        int limit = line.length();
+    private static List<String> tokens(String line) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             if (Character.isWhitespace(c) || c == ',' || c == ';') {
-                limit = i;
-                break;
+                if (!current.isEmpty()) {
+                    tokens.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                current.append(c);
             }
         }
-        return line.substring(0, limit).trim();
+        if (!current.isEmpty()) {
+            tokens.add(current.toString());
+        }
+        return tokens;
     }
 }

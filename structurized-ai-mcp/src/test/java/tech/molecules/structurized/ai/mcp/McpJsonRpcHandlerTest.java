@@ -29,6 +29,7 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
+        assertEquals("0.2.1", response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
     }
 
@@ -48,14 +49,127 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(23, tools.size());
+        assertEquals(36, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "search_substructure"));
         assertTrue(hasTool(tools, "cut_bonds"));
         assertTrue(hasTool(tools, "open_prism_dataset"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));
+        assertTrue(hasTool(tools, "create_decomposition_config"));
+        assertTrue(hasTool(tools, "evaluate_decomposition"));
+        assertTrue(hasTool(tools, "get_decomposition_result"));
+        assertTrue(hasTool(tools, "get_decomposition_fragment_summary"));
+        assertTrue(hasTool(tools, "cluster_structures"));
+        assertTrue(hasTool(tools, "list_clusterings"));
+        assertTrue(hasTool(tools, "get_clustering"));
+        assertTrue(hasTool(tools, "get_cluster"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
+    }
+
+    @Test
+    void canClusterStructuresThroughToolCalls() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        call(handler, request(1, "register_structure", """
+                {"smiles":"c1ccccc1","structure_id":"benzene_a","label":"Benzene A"}
+                """));
+        call(handler, request(2, "register_structure", """
+                {"smiles":"CCO","structure_id":"ethanol","label":"Ethanol"}
+                """));
+        call(handler, request(3, "register_structure", """
+                {"smiles":"c1ccccc1","structure_id":"benzene_b","label":"Benzene B"}
+                """));
+
+        JsonNode clustered = call(handler, request(4, "cluster_structures", """
+                {"clustering_id":"rough1","repository_id":"session","threshold":1.0,"max_cross_neighbors":2}
+                """));
+        assertEquals("rough1", clustered.at("/result/structuredContent/clusteringId").asText());
+        assertEquals("skelspheres", clustered.at("/result/structuredContent/descriptor").asText());
+        assertEquals("greedy_leaders", clustered.at("/result/structuredContent/strategy").asText());
+        assertEquals(3, clustered.at("/result/structuredContent/moleculeCount").asInt());
+        assertEquals(2, clustered.at("/result/structuredContent/clusterCount").asInt());
+
+        JsonNode listed = call(handler, request(5, "list_clusterings", "{}"));
+        assertEquals("rough1", listed.at("/result/structuredContent/0/clusteringId").asText());
+
+        JsonNode summary = call(handler, request(6, "get_clustering", """
+                {"clustering_id":"rough1","include_singletons":true}
+                """));
+        assertEquals("cluster_1", summary.at("/result/structuredContent/clusters/0/clusterId").asText());
+        assertEquals("benzene_a", summary.at("/result/structuredContent/clusters/0/representativeStructureId").asText());
+        assertEquals(2, summary.at("/result/structuredContent/clusters/0/size").asInt());
+
+        JsonNode cluster = call(handler, request(7, "get_cluster", """
+                {"clustering_id":"rough1","cluster_id":"cluster_1"}
+                """));
+        assertEquals("cluster_1", cluster.at("/result/structuredContent/cluster/clusterId").asText());
+        assertEquals("benzene_b", cluster.at("/result/structuredContent/cluster/members/1/structureId").asText());
+        assertEquals(1.0, cluster.at("/result/structuredContent/cluster/members/1/similarityToRepresentative").asDouble());
+    }
+
+    @Test
+    void canCreateEvaluateAndInspectDecompositionThroughToolCalls() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        call(handler, request(1, "register_structure", """
+                {"smiles":"CCCO","structure_id":"butanol","label":"Butanol fragment"}
+                """));
+        call(handler, request(2, "register_structure", """
+                {"smiles":"C","structure_id":"methane","label":"Methane"}
+                """));
+
+        String configArgs = """
+                {
+                  "config_id":"demo_split",
+                  "label":"Demo split",
+                  "config":{
+                    "version":"series-decomposition-v1",
+                    "rules":[
+                      {
+                        "id":"split_root",
+                        "labelToSplit":null,
+                        "smarts":"CCO",
+                        "atomLabels":{"0":"alkyl","1":"linker","2":"head"}
+                      }
+                    ]
+                  }
+                }
+                """;
+        JsonNode created = call(handler, request(3, "create_decomposition_config", configArgs));
+        assertEquals("demo_split", created.at("/result/structuredContent/configId").asText());
+        assertEquals(1, created.at("/result/structuredContent/ruleCount").asInt());
+
+        JsonNode evaluated = call(handler, request(4, "evaluate_decomposition", """
+                {"evaluation_id":"eval1","config_id":"demo_split","repository_id":"session"}
+                """));
+        assertEquals("eval1", evaluated.at("/result/structuredContent/evaluationId").asText());
+        assertEquals(2, evaluated.at("/result/structuredContent/moleculeCount").asInt());
+        assertEquals(1, evaluated.at("/result/structuredContent/successfulCount").asInt());
+        assertEquals(1, evaluated.at("/result/structuredContent/rootNoMatchCount").asInt());
+
+        JsonNode summary = call(handler, request(5, "get_decomposition_evaluation", """
+                {"evaluation_id":"eval1","include_results":true}
+                """));
+        assertEquals("SUCCESS", summary.at("/result/structuredContent/results/0/status").asText());
+        assertTrue(summary.at("/result/structuredContent/results/0/terminalPaths").toString().contains("root.alkyl"));
+
+        JsonNode result = call(handler, request(6, "get_decomposition_result", """
+                {"evaluation_id":"eval1","structure_id":"butanol"}
+                """));
+        assertEquals("butanol", result.at("/result/structuredContent/structureId").asText());
+        assertEquals("SUCCESS", result.at("/result/structuredContent/status").asText());
+        assertEquals("a1", result.at("/result/structuredContent/root/children/0/atomIds/0").asText());
+        assertTrue(result.at("/result/structuredContent/root/cutBonds").size() >= 1);
+
+        JsonNode failures = call(handler, request(7, "get_decomposition_failures", """
+                {"evaluation_id":"eval1"}
+                """));
+        assertEquals("methane", failures.at("/result/structuredContent/groups/NO_MATCH/0/structureId").asText());
+
+        JsonNode fragments = call(handler, request(8, "get_decomposition_fragment_summary", """
+                {"evaluation_id":"eval1"}
+                """));
+        assertTrue(fragments.at("/result/structuredContent/rows").size() >= 3);
+        assertTrue(fragments.toString().contains("root.head"));
     }
 
     @Test
