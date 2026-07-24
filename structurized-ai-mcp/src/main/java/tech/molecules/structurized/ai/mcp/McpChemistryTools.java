@@ -337,12 +337,14 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 this::summarizeSelectionByEndpoint);
-        add(result, "summarize_clusters_by_endpoint", "Summarizes one numeric Prism endpoint for each cluster without returning member IDs.", schema(
+        add(result, "summarize_clusters_by_endpoint", "Summarizes one numeric Prism endpoint for paged non-singleton clusters without returning member IDs. Defaults to include_singletons:false, offset:0, limit:50; use output_target:file for the full filtered table.", schema(
                 required("clustering_id", "dataset_id", "endpoint_id"),
                 prop("clustering_id", "string", "Stored clustering ID."),
                 prop("dataset_id", "string", "Loaded Prism dataset ID."),
                 prop("endpoint_id", "string", "Numeric Prism endpoint ID."),
-                prop("include_singletons", "boolean", "Whether to include singleton clusters."),
+                prop("include_singletons", "boolean", "Whether to include singleton clusters. Defaults to false."),
+                prop("offset", "integer", "Zero-based cluster offset after filtering and size sorting. Defaults to 0."),
+                prop("limit", "integer", "Maximum clusters returned in response mode. Defaults to 50."),
                 prop("threshold", "number", "Optional activity threshold."),
                 prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
                 prop("output_target", "string", "response or file. Defaults to response."),
@@ -451,7 +453,8 @@ final class McpChemistryTools {
             case "clustering_workflow" -> """
                     # Clustering Workflow
                     Run cluster_structures with SkelSpheres threshold around 0.75-0.85 for rough chemotype neighborhoods.
-                    Use get_clustering for representative-led summaries, then summarize_clusters_by_endpoint to compare endpoint distributions without member payloads.
+                    Use get_clustering for representative-led summaries, then summarize_clusters_by_endpoint to compare endpoint distributions without member payloads. By default, cluster endpoint summaries return a paged table of non-singleton clusters only.
+                    Pass include_singletons:true only when auditing singleton behavior. Use output_target:file for complete per-cluster endpoint tables.
                     Use get_cluster_members with create_selection:true for a cluster-specific selection, or output_target:file for a larger member list.
                     """;
             case "decomposition_rules" -> """
@@ -626,20 +629,34 @@ final class McpChemistryTools {
     }
 
     private Object summarizeClustersByEndpoint(ObjectNode args) {
-        EndpointClusterSummary response = buildClusterEndpointSummary(
+        boolean includeSingletons = optionalBoolean(args, "include_singletons", false);
+        int offset = Math.max(0, optionalInt(args, "offset", 0));
+        int limit = Math.max(1, optionalInt(args, "limit", 50));
+        EndpointClusterSummary full = buildClusterEndpointSummary(
                 requiredString(args, "clustering_id"),
                 requiredString(args, "dataset_id"),
                 requiredString(args, "endpoint_id"),
-                optionalBoolean(args, "include_singletons", true),
+                includeSingletons,
                 optionalDouble(args, "threshold", null),
                 optionalString(args, "threshold_direction", "gte")
         );
+        EndpointClusterSummary response = full.page(offset, limit);
         return maybeFile(
                 args,
                 "summarize_clusters_by_endpoint",
-                response,
-                new EndpointClusterArtifactSummary(response.clusteringId(), response.repositoryId(), response.datasetId(), response.endpointId(), response.clusters().size()),
-                response.clusters().size()
+                full,
+                new EndpointClusterArtifactSummary(
+                        full.clusteringId(),
+                        full.repositoryId(),
+                        full.datasetId(),
+                        full.endpointId(),
+                        full.totalClusters(),
+                        response.returnedClusters(),
+                        response.offset(),
+                        response.limit(),
+                        full.includeSingletons()),
+                full.totalClusters(),
+                response
         );
     }
 
@@ -670,7 +687,7 @@ final class McpChemistryTools {
             ));
         }
         rows.sort((a, b) -> Integer.compare(b.size(), a.size()));
-        return new EndpointClusterSummary(clusteringId, repositoryId, datasetId, endpointId, rows);
+        return new EndpointClusterSummary(clusteringId, repositoryId, datasetId, endpointId, includeSingletons, rows.size(), rows.size(), 0, rows.size(), rows);
     }
 
     private EndpointSummaryRow endpointStats(
@@ -765,11 +782,15 @@ final class McpChemistryTools {
     }
 
     private Object maybeFile(ObjectNode args, String sourceTool, Object responsePayload, Object summary, Integer rowCount) {
+        return maybeFile(args, sourceTool, responsePayload, summary, rowCount, responsePayload);
+    }
+
+    private Object maybeFile(ObjectNode args, String sourceTool, Object artifactPayload, Object summary, Integer rowCount, Object responsePayload) {
         String outputTarget = normalizeOutputTarget(optionalString(args, "output_target", "response"));
         if ("response".equals(outputTarget)) {
             return responsePayload;
         }
-        McpArtifactService.ArtifactRecord artifact = writeJsonArtifact(args, sourceTool, responsePayload, rowCount);
+        McpArtifactService.ArtifactRecord artifact = writeJsonArtifact(args, sourceTool, artifactPayload, rowCount);
         return new ArtifactOutputResult(summary, artifact);
     }
 
@@ -1063,7 +1084,11 @@ final class McpChemistryTools {
             String repositoryId,
             String datasetId,
             String endpointId,
-            int clusterCount
+            int totalClusters,
+            int returnedClusters,
+            int offset,
+            int limit,
+            boolean includeSingletons
     ) {}
 
     private record FragmentSummaryArtifactSummary(
@@ -1100,8 +1125,31 @@ final class McpChemistryTools {
             String repositoryId,
             String datasetId,
             String endpointId,
+            boolean includeSingletons,
+            int totalClusters,
+            int returnedClusters,
+            int offset,
+            int limit,
             List<EndpointClusterSummaryRow> clusters
-    ) {}
+    ) {
+        EndpointClusterSummary page(int requestedOffset, int requestedLimit) {
+            int safeOffset = Math.max(0, requestedOffset);
+            int safeLimit = Math.min(1000, Math.max(1, requestedLimit));
+            int from = Math.min(safeOffset, clusters.size());
+            int to = Math.min(from + safeLimit, clusters.size());
+            return new EndpointClusterSummary(
+                    clusteringId,
+                    repositoryId,
+                    datasetId,
+                    endpointId,
+                    includeSingletons,
+                    totalClusters,
+                    to - from,
+                    safeOffset,
+                    safeLimit,
+                    List.copyOf(clusters.subList(from, to)));
+        }
+    }
 
     private record EndpointClusterSummaryRow(
             String clusterId,

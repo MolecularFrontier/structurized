@@ -108,7 +108,9 @@ Follow-up tools:
   `create_selection:true` to store the complete cluster as a server-side selection handle, or
   `output_target:"file"` to write larger member lists to a managed artifact.
 - `summarize_clusters_by_endpoint`: compute numeric Prism endpoint statistics per cluster without
-  returning member IDs. Use `output_target:"file"` when returning many cluster rows.
+  returning member IDs. Defaults to `include_singletons:false`, `offset:0`, and `limit:50` so the
+  response is a compact non-singleton cluster page. Use `include_singletons:true` only when auditing
+  singleton behavior, and `output_target:"file"` for the full filtered table.
 
 Example endpoint summary:
 
@@ -118,6 +120,8 @@ summarize_clusters_by_endpoint({
   "dataset_id": "demo",
   "endpoint_id": "pIC50",
   "include_singletons": false,
+  "offset": 0,
+  "limit": 50,
   "threshold": 7.0,
   "threshold_direction": "gte"
 })
@@ -127,7 +131,7 @@ A useful agent workflow is:
 
 1. Run `cluster_structures` at `0.80`.
 2. Use `get_clustering` to rank clusters by size and representatives.
-3. Use `summarize_clusters_by_endpoint` to see SAR-relevant endpoint distributions server-side.
+3. Use `summarize_clusters_by_endpoint` to see SAR-relevant endpoint distributions server-side; request `output_target:"file"` for complete cluster tables.
 4. Inspect selected representatives with `inspect_structure`.
 5. Use `get_cluster_members` only for bounded drill-down or to create a selection handle.
 6. Use `search_substructure` in count mode first to test candidate series SMARTS.

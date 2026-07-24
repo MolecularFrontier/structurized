@@ -135,6 +135,54 @@ class McpJsonRpcHandlerTest {
     }
 
     @Test
+    void clusterEndpointSummaryDefaultsToPagedNonSingletonResponse() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = prismDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(2, "register_structure", """
+                {"smiles":"c1ccncc1","structure_id":"pyridine_a","fields":{"prism.subject_id":"CMP-001"}}
+                """));
+        call(handler, request(3, "register_structure", """
+                {"smiles":"c1ccncc1","structure_id":"pyridine_b","fields":{"prism.subject_id":"CMP-001"}}
+                """));
+        call(handler, request(4, "register_structure", """
+                {"smiles":"CCO","structure_id":"ethanol","fields":{"prism.subject_id":"CMP-002"}}
+                """));
+        call(handler, request(5, "cluster_structures", """
+                {"clustering_id":"endpoint_clusters","repository_id":"session","threshold":1.0}
+                """));
+
+        JsonNode defaultSummary = call(handler, request(6, "summarize_clusters_by_endpoint", """
+                {"clustering_id":"endpoint_clusters","dataset_id":"demo","endpoint_id":"pIC50"}
+                """));
+        assertFalse(defaultSummary.at("/result/structuredContent/includeSingletons").asBoolean());
+        assertEquals(1, defaultSummary.at("/result/structuredContent/totalClusters").asInt());
+        assertEquals(1, defaultSummary.at("/result/structuredContent/returnedClusters").asInt());
+        assertEquals(50, defaultSummary.at("/result/structuredContent/limit").asInt());
+        assertEquals(2, defaultSummary.at("/result/structuredContent/clusters/0/size").asInt());
+
+        JsonNode pagedWithSingletons = call(handler, request(7, "summarize_clusters_by_endpoint", """
+                {"clustering_id":"endpoint_clusters","dataset_id":"demo","endpoint_id":"pIC50","include_singletons":true,"offset":1,"limit":1}
+                """));
+        assertTrue(pagedWithSingletons.at("/result/structuredContent/includeSingletons").asBoolean());
+        assertEquals(2, pagedWithSingletons.at("/result/structuredContent/totalClusters").asInt());
+        assertEquals(1, pagedWithSingletons.at("/result/structuredContent/returnedClusters").asInt());
+        assertEquals(1, pagedWithSingletons.at("/result/structuredContent/offset").asInt());
+        assertEquals(1, pagedWithSingletons.at("/result/structuredContent/limit").asInt());
+        assertEquals(1, pagedWithSingletons.at("/result/structuredContent/clusters/0/size").asInt());
+
+        JsonNode fileSummary = call(handler, request(8, "summarize_clusters_by_endpoint", """
+                {"clustering_id":"endpoint_clusters","dataset_id":"demo","endpoint_id":"pIC50","include_singletons":true,"limit":1,"output_target":"file","output_name":"summaries/endpoint-clusters.json"}
+                """));
+        assertEquals(2, fileSummary.at("/result/structuredContent/summary/totalClusters").asInt());
+        assertEquals(1, fileSummary.at("/result/structuredContent/summary/returnedClusters").asInt());
+        assertTrue(fileSummary.at("/result/structuredContent/clusters").isMissingNode());
+        Path artifact = Path.of(fileSummary.at("/result/structuredContent/artifact/path").asText());
+        assertEquals(2, mapper.readTree(artifact.toFile()).at("/clusters").size());
+    }
+
+    @Test
     void canUseEmbeddedGuideAndRichDecompositionValidation() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
 
