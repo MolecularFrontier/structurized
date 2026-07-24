@@ -7,7 +7,7 @@
     <parent>
         <groupId>tech.molecules</groupId>
         <artifactId>structurized</artifactId>
-        <version>0.2.1</version>
+        <version>0.2.2</version>
     </parent>
 
     <artifactId>structurized-core</artifactId>
