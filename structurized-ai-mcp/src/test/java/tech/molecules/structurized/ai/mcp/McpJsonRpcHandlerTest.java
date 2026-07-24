@@ -49,9 +49,12 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(36, tools.size());
+        assertEquals(44, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
+        assertTrue(hasTool(tools, "list_artifacts"));
+        assertTrue(hasTool(tools, "get_artifact_info"));
+        assertTrue(hasTool(tools, "get_structurized_tool_guide"));
         assertTrue(hasTool(tools, "search_substructure"));
         assertTrue(hasTool(tools, "cut_bonds"));
         assertTrue(hasTool(tools, "open_prism_dataset"));
@@ -64,6 +67,13 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "list_clusterings"));
         assertTrue(hasTool(tools, "get_clustering"));
         assertTrue(hasTool(tools, "get_cluster"));
+        assertTrue(hasTool(tools, "get_cluster_members"));
+        assertTrue(hasTool(tools, "get_selection"));
+        assertTrue(hasTool(tools, "get_selection_members"));
+        assertTrue(hasTool(tools, "summarize_selection_by_endpoint"));
+        assertTrue(hasTool(tools, "summarize_clusters_by_endpoint"));
+        assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
+        assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
     }
 
@@ -103,8 +113,72 @@ class McpJsonRpcHandlerTest {
                 {"clustering_id":"rough1","cluster_id":"cluster_1"}
                 """));
         assertEquals("cluster_1", cluster.at("/result/structuredContent/cluster/clusterId").asText());
-        assertEquals("benzene_b", cluster.at("/result/structuredContent/cluster/members/1/structureId").asText());
-        assertEquals(1.0, cluster.at("/result/structuredContent/cluster/members/1/similarityToRepresentative").asDouble());
+        assertEquals("benzene_b", cluster.at("/result/structuredContent/cluster/exampleMembers/1/structureId").asText());
+        assertEquals(1.0, cluster.at("/result/structuredContent/cluster/exampleMembers/1/similarityToRepresentative").asDouble());
+
+        JsonNode members = call(handler, request(8, "get_cluster_members", """
+                {"clustering_id":"rough1","cluster_id":"cluster_1","limit":1,"create_selection":true,"selection_id":"benzene_cluster"}
+                """));
+        assertEquals(2, members.at("/result/structuredContent/cluster/totalMembers").asInt());
+        assertEquals(1, members.at("/result/structuredContent/cluster/members").size());
+        assertEquals("benzene_cluster", members.at("/result/structuredContent/selection/selectionId").asText());
+
+        JsonNode fileMembers = call(handler, request(9, "get_cluster_members", """
+                {"clustering_id":"rough1","cluster_id":"cluster_1","limit":2,"output_target":"file","output_name":"clusters/benzene.json"}
+                """));
+        Path memberArtifact = Path.of(fileMembers.at("/result/structuredContent/artifact/path").asText());
+        assertTrue(Files.exists(memberArtifact));
+        assertEquals("clusters/benzene.json", fileMembers.at("/result/structuredContent/artifact/relativePath").asText());
+        assertEquals(2, fileMembers.at("/result/structuredContent/summary/returnedMembers").asInt());
+        assertTrue(fileMembers.at("/result/structuredContent/cluster/members").isMissingNode());
+        assertEquals("benzene_b", mapper.readTree(memberArtifact.toFile()).at("/cluster/members/1/structureId").asText());
+    }
+
+    @Test
+    void canUseEmbeddedGuideAndRichDecompositionValidation() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+
+        JsonNode guide = call(handler, request(1, "get_structurized_tool_guide", "{\"topic\":\"decomposition_rules\"}"));
+        assertTrue(guide.at("/result/structuredContent/markdown").asText().contains("atom-map numbers"));
+        assertTrue(guide.at("/result/structuredContent/markdown").asText().contains("evaluate_decomposition"));
+
+        JsonNode validation = call(handler, request(2, "validate_decomposition_config", """
+                {
+                  "config": {
+                    "version":"series-decomposition-v1",
+                    "rules":[
+                      {
+                        "id":"wrong_amide",
+                        "labelToSplit":null,
+                        "smarts":"[C:1](=O)[NX3:2]",
+                        "atomLabels":{"1":"acyl","2":"amine"}
+                      }
+                    ]
+                  }
+                }
+                """));
+        assertFalse(validation.at("/result/structuredContent/valid").asBoolean());
+        assertEquals("schema_and_query_graph", validation.at("/result/structuredContent/validationScope").asText());
+        assertTrue(validation.at("/result/structuredContent/problems/0").asText().contains("multiple label types"));
+        assertTrue(validation.at("/result/structuredContent/warnings/0").asText().contains("evaluate_decomposition"));
+
+        JsonNode corrected = call(handler, request(3, "validate_decomposition_config", """
+                {
+                  "config": {
+                    "version":"series-decomposition-v1",
+                    "rules":[
+                      {
+                        "id":"amide",
+                        "labelToSplit":null,
+                        "smarts":"[C:1](=O)[NX3:2]",
+                        "atomLabels":{"0":"acyl","2":"amine"}
+                      }
+                    ]
+                  }
+                }
+                """));
+        assertTrue(corrected.at("/result/structuredContent/valid").asBoolean());
+        assertEquals(3, corrected.at("/result/structuredContent/ruleDiagnostics/0/queryAtomCount").asInt());
     }
 
     @Test
@@ -170,6 +244,14 @@ class McpJsonRpcHandlerTest {
                 """));
         assertTrue(fragments.at("/result/structuredContent/rows").size() >= 3);
         assertTrue(fragments.toString().contains("root.head"));
+
+        JsonNode fragmentFile = call(handler, request(9, "get_decomposition_fragment_summary", """
+                {"evaluation_id":"eval1","include_details":true,"output_target":"file","output_name":"decomp/fragments.json"}
+                """));
+        Path fragmentArtifact = Path.of(fragmentFile.at("/result/structuredContent/artifact/path").asText());
+        assertTrue(Files.exists(fragmentArtifact));
+        assertTrue(fragmentFile.at("/result/structuredContent/rows").isMissingNode());
+        assertTrue(mapper.readTree(fragmentArtifact.toFile()).at("/rows/0/examples/0/atomIds").isArray());
     }
 
     @Test
@@ -184,8 +266,24 @@ class McpJsonRpcHandlerTest {
         assertEquals(6, inspect.at("/result/structuredContent/atoms").size());
 
         JsonNode search = call(handler, request(3, "search_substructure", "{\"query\":\"c1ccncc1\",\"query_type\":\"smiles\"}"));
+        assertEquals("count", search.at("/result/structuredContent/outputMode").asText());
         assertEquals(1, search.at("/result/structuredContent/summary/matchingStructures").asInt());
-        assertEquals("pyridine", search.at("/result/structuredContent/matches/0/structureId").asText());
+        assertEquals(0, search.at("/result/structuredContent/matches").size());
+
+        JsonNode fullSearch = call(handler, request(4, "search_substructure", "{\"query\":\"c1ccncc1\",\"query_type\":\"smiles\",\"output_mode\":\"full\",\"limit\":5}"));
+        assertEquals("pyridine", fullSearch.at("/result/structuredContent/matches/0/structureId").asText());
+
+        JsonNode fileSearch = call(handler, request(5, "search_substructure", "{\"query\":\"c1ccncc1\",\"query_type\":\"smiles\",\"output_mode\":\"full\",\"limit\":5,\"output_target\":\"file\",\"output_name\":\"search/pyridine.json\"}"));
+        Path searchArtifact = Path.of(fileSearch.at("/result/structuredContent/artifact/path").asText());
+        assertTrue(Files.exists(searchArtifact));
+        assertTrue(fileSearch.at("/result/structuredContent/matches").isMissingNode());
+        assertEquals("pyridine", mapper.readTree(searchArtifact.toFile()).at("/matches/0/structureId").asText());
+
+        JsonNode artifactInfo = call(handler, request(6, "get_artifact_info", "{\"artifact_id\":\"" + fileSearch.at("/result/structuredContent/artifact/artifactId").asText() + "\"}"));
+        assertEquals("search/pyridine.json", artifactInfo.at("/result/structuredContent/relativePath").asText());
+
+        JsonNode artifacts = call(handler, request(7, "list_artifacts", "{}"));
+        assertTrue(artifacts.at("/result/structuredContent").size() >= 1);
     }
 
 
@@ -207,12 +305,40 @@ class McpJsonRpcHandlerTest {
         assertEquals("prism:demo:series:Kinase:A", repositoryId);
         assertEquals(2, materialized.at("/result/structuredContent/structuresImported").asInt());
 
-        JsonNode search = call(handler, request(13, "search_substructure", "{\"query\":\"c1ccncc1\",\"repository_ids\":[\"" + repositoryId + "\"]}"));
+        JsonNode search = call(handler, request(13, "search_substructure", "{\"query\":\"c1ccncc1\",\"repository_ids\":[\"" + repositoryId + "\"],\"output_mode\":\"ids\",\"create_selection\":true,\"selection_id\":\"pyridines\"}"));
         assertEquals("CMP-001", search.at("/result/structuredContent/matches/0/structureId").asText());
+        assertEquals("pyridines", search.at("/result/structuredContent/selection/selectionId").asText());
 
         JsonNode values = call(handler, request(14, "get_prism_endpoint_values", "{\"dataset_id\":\"demo\",\"subject_ids\":[\"CMP-001\"],\"endpoint_ids\":[\"pIC50\"]}"));
         assertEquals("pIC50", values.at("/result/structuredContent/0/endpointId").asText());
         assertEquals(7.2, values.at("/result/structuredContent/0/result/mean").asDouble());
+
+        JsonNode selectionStats = call(handler, request(15, "summarize_selection_by_endpoint", "{\"selection_id\":\"pyridines\",\"dataset_id\":\"demo\",\"endpoint_ids\":[\"pIC50\"],\"threshold\":7.0}"));
+        assertEquals(1, selectionStats.at("/result/structuredContent/endpoints/0/measuredCount").asInt());
+        assertEquals(7.2, selectionStats.at("/result/structuredContent/endpoints/0/median").asDouble());
+        assertEquals(1, selectionStats.at("/result/structuredContent/endpoints/0/thresholdHitCount").asInt());
+
+        JsonNode selectionMembers = call(handler, request(16, "get_selection_members", "{\"selection_id\":\"pyridines\",\"output_target\":\"file\",\"output_name\":\"selections/pyridines.json\"}"));
+        Path selectionArtifact = Path.of(selectionMembers.at("/result/structuredContent/artifact/path").asText());
+        assertTrue(Files.exists(selectionArtifact));
+        assertEquals("CMP-001", mapper.readTree(selectionArtifact.toFile()).at("/members/0/structureId").asText());
+
+        call(handler, request(17, "cluster_structures", "{\"clustering_id\":\"prism_clusters\",\"repository_id\":\"" + repositoryId + "\",\"threshold\":0.0}"));
+        JsonNode clusterStats = call(handler, request(18, "summarize_clusters_by_endpoint", "{\"clustering_id\":\"prism_clusters\",\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"output_target\":\"file\",\"output_name\":\"summaries/clusters.json\"}"));
+        Path clusterStatsArtifact = Path.of(clusterStats.at("/result/structuredContent/artifact/path").asText());
+        assertTrue(Files.exists(clusterStatsArtifact));
+        assertEquals("pIC50", mapper.readTree(clusterStatsArtifact.toFile()).at("/clusters/0/endpoint/endpointId").asText());
+    }
+
+    @Test
+    void unsafeArtifactOutputNameReturnsToolError() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        call(handler, request(1, "register_structure", "{\"smiles\":\"CCO\",\"structure_id\":\"ethanol\"}"));
+
+        JsonNode response = call(handler, request(2, "search_substructure", "{\"query\":\"CC\",\"output_mode\":\"ids\",\"output_target\":\"file\",\"output_name\":\"../bad.json\"}"));
+
+        assertTrue(response.at("/result/isError").asBoolean());
+        assertEquals("invalid_artifact_path", response.at("/result/structuredContent/code").asText());
     }
 
     @Test
@@ -268,6 +394,15 @@ class McpJsonRpcHandlerTest {
 
     private static String request(int id, String toolName, String argsJson) {
         return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{\"name\":\"" + toolName + "\",\"arguments\":" + argsJson + "}}";
+    }
+
+    private static String toolDescription(JsonNode tools, String name) {
+        for (JsonNode tool : tools) {
+            if (name.equals(tool.get("name").asText())) {
+                return tool.get("description").asText();
+            }
+        }
+        return "";
     }
 
     private static boolean hasTool(JsonNode tools, String name) {

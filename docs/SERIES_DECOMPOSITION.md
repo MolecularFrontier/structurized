@@ -44,7 +44,8 @@ Fields:
 - `title` and `description`: optional human-readable metadata.
 - `labelToSplit`: label targeted by this rule; `null` means root molecule.
 - `smarts`: OpenChemLib SMARTS query.
-- `atomLabels`: map from query atom index to output fragment label.
+- `atomLabels`: map from zero-based SMARTS query atom index to output fragment label. These
+  keys are not SMARTS atom-map numbers such as `:1` or `:2`.
 - `enabled`: optional; omitted or `true` means active.
 
 Multiple rules may target the same `labelToSplit`. They are tried in list order. The first rule that
@@ -61,6 +62,13 @@ A rule application is valid only if every resulting component has exactly one ma
 Unlabeled atoms are allowed and are absorbed into the labeled component they remain connected to.
 This lets a compact SMARTS split a full substituent region, linker, or scaffold part without labeling
 every atom in the molecule.
+
+Atom-label keys are zero-based positions in the parsed SMARTS query graph. They are not atom-map
+numbers. For example, in `[C:1](=O)[NX3:2]`, the query atom indices are carbon `0`, oxygen `1`,
+and nitrogen `2`. To split an amide into `acyl` and `amine`, use `{"0":"acyl","2":"amine"}`
+and leave the oxygen unlabeled. The tempting `{"1":"acyl","2":"amine"}` labels oxygen and
+nitrogen while leaving carbon unlabeled, so the query component still contains both label types and
+is invalid.
 
 Example intent:
 
@@ -190,7 +198,10 @@ Useful follow-up tools:
 - `get_decomposition_evaluation`: summary and optional molecule-level result list.
 - `get_decomposition_result`: full tree for one molecule.
 - `get_decomposition_failures`: non-successful molecules grouped by status.
-- `get_decomposition_fragment_summary`: terminal fragment support and examples by path.
+- `get_decomposition_fragment_summary`: terminal fragment support and examples by path. The MCP tool
+  returns compact rows by default: counts plus representative fragment SMILES. Set
+  `include_details:true` only when the caller needs fragment signatures, atom IDs, and atom
+  indices. Set `output_target:"file"` to write compact or detailed rows to a managed artifact.
 
 ## Current limitations
 

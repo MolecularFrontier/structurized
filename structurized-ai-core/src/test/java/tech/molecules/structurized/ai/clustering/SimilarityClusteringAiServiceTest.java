@@ -30,7 +30,12 @@ class SimilarityClusteringAiServiceTest {
         assertEquals(3, record.moleculeCount());
         assertEquals(2, record.clusterCount());
         assertEquals("benzene_a", view.clusters().getFirst().representativeStructureId());
-        assertEquals(List.of("benzene_a", "benzene_b"), cluster.cluster().members().stream().map(member -> member.structureId()).toList());
+        assertEquals(List.of("benzene_a", "benzene_b"), cluster.cluster().exampleMembers().stream().map(member -> member.structureId()).toList());
+        assertEquals("c1ccccc1", cluster.cluster().representativeSmiles());
+
+        SimilarityClusteringAiService.ClusterMembersView members = ctx.service.getClusterMembers("rough1", "cluster_1", 1, 1);
+        assertEquals(2, members.totalMembers());
+        assertEquals(List.of("benzene_b"), members.members().stream().map(member -> member.structureId()).toList());
     }
 
     @Test

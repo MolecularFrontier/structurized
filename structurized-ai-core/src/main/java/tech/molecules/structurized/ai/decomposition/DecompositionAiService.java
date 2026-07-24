@@ -1,6 +1,7 @@
 package tech.molecules.structurized.ai.decomposition;
 
 import com.actelion.research.chem.Canonizer;
+import com.actelion.research.chem.IsomericSmilesCreator;
 import com.actelion.research.chem.StereoMolecule;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.model.StructureRecord;
@@ -44,12 +45,15 @@ public final class DecompositionAiService {
     }
 
     public synchronized DecompositionValidationResult validateConfig(DecompositionConfig config) {
-        List<String> problems = DecompositionConfigValidator.validate(config);
+        DecompositionConfigValidator.ValidationReport report = DecompositionConfigValidator.validateDetailed(config);
         return new DecompositionValidationResult(
-                problems.isEmpty(),
-                problems,
-                config == null ? null : config.version(),
-                config == null || config.rules() == null ? 0 : config.rules().size()
+                report.valid(),
+                report.problems(),
+                report.warnings(),
+                report.validationScope(),
+                report.version(),
+                report.ruleCount(),
+                report.ruleDiagnostics()
         );
     }
 
@@ -150,11 +154,12 @@ public final class DecompositionAiService {
                 if (node.label() == null) {
                     continue;
                 }
-                String signature = fragmentSignature(entry.structure().snapshot().moleculeView(), node);
+                FragmentIdentity identity = fragmentIdentity(entry.structure().snapshot().moleculeView(), node);
                 byPath.computeIfAbsent(node.path(), ignored -> new MutableFragmentSummary(node.path(), node.label()))
                         .add(new FragmentExample(
                                 entry.structure().record().structureId(),
-                                signature,
+                                identity.signature(),
+                                identity.smiles(),
                                 atomIds(entry.structure().snapshot(), node.atomIndices()),
                                 node.atomIndices()
                         ));
@@ -306,14 +311,17 @@ public final class DecompositionAiService {
         return atomIndices.stream().map(snapshot::atomId).toList();
     }
 
-    private static String fragmentSignature(StereoMolecule molecule, DecompositionNode node) {
+    private static FragmentIdentity fragmentIdentity(StereoMolecule molecule, DecompositionNode node) {
         boolean[] include = new boolean[molecule.getAtoms()];
         for (int atom : node.atomIndices()) {
             include[atom] = true;
         }
         StereoMolecule fragment = new StereoMolecule();
         molecule.copyMoleculeByAtoms(fragment, include, true, null);
-        return new Canonizer(fragment, Canonizer.ENCODE_ATOM_CUSTOM_LABELS).getIDCode();
+        return new FragmentIdentity(
+                new Canonizer(fragment, Canonizer.ENCODE_ATOM_CUSTOM_LABELS).getIDCode(),
+                IsomericSmilesCreator.createSmiles(fragment)
+        );
     }
 
     private StoredConfig config(String configId) {
@@ -422,7 +430,15 @@ public final class DecompositionAiService {
         }
     }
 
-    public record DecompositionValidationResult(boolean valid, List<String> problems, String version, int ruleCount) {}
+    public record DecompositionValidationResult(
+            boolean valid,
+            List<String> problems,
+            List<String> warnings,
+            String validationScope,
+            String version,
+            int ruleCount,
+            List<DecompositionConfigValidator.RuleDiagnostic> ruleDiagnostics
+    ) {}
 
     public record DecompositionConfigRecord(String configId, String label, String version, int ruleCount, List<String> validationProblems) {}
 
@@ -513,5 +529,7 @@ public final class DecompositionAiService {
             List<FragmentExample> examples
     ) {}
 
-    public record FragmentExample(String structureId, String signature, List<String> atomIds, List<Integer> atomIndices) {}
+    private record FragmentIdentity(String signature, String smiles) {}
+
+    public record FragmentExample(String structureId, String signature, String fragmentSmiles, List<String> atomIds, List<Integer> atomIndices) {}
 }

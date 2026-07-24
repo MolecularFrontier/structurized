@@ -77,7 +77,7 @@ public final class SimilarityClusteringAiService {
         int safeLimit = safeLimit(limit);
         List<ClusterSummary> clusters = stored.result().clusters().stream()
                 .filter(cluster -> includeSingletons || cluster.members().size() > 1)
-                .map(SimilarityClusteringAiService::summary)
+                .map(cluster -> summary(stored.repositoryId(), cluster))
                 .toList();
         return new SimilarityClusteringView(stored.toRecord(), page(clusters, safeOffset, safeLimit), stored.result().unclustered());
     }
@@ -88,7 +88,37 @@ public final class SimilarityClusteringAiService {
                 .filter(candidate -> candidate.clusterId().equals(clusterId))
                 .findFirst()
                 .orElseThrow(() -> new ChemOperationException("cluster_not_found", "Cluster " + clusterId + " is not part of clustering " + clusteringId + "."));
-        return new SimilarityClusterView(stored.clusteringId(), stored.repositoryId(), cluster);
+        return new SimilarityClusterView(stored.clusteringId(), stored.repositoryId(), summary(stored.repositoryId(), cluster));
+    }
+
+    public synchronized ClusterMembersView getClusterMembers(String clusteringId, String clusterId, int offset, int limit) {
+        StoredClustering stored = clustering(clusteringId);
+        SimilarityCluster cluster = cluster(stored, clusterId);
+        int safeOffset = Math.max(0, offset);
+        int safeLimit = safeLimit(limit);
+        List<MemberSummary> members = cluster.members().stream()
+                .sorted(Comparator
+                        .comparingDouble(ClusterMember::similarityToRepresentative).reversed()
+                        .thenComparingInt(ClusterMember::inputIndex))
+                .map(member -> memberSummary(stored.repositoryId(), member))
+                .toList();
+        return new ClusterMembersView(stored.clusteringId(), stored.repositoryId(), cluster.clusterId(), cluster.members().size(), page(members, safeOffset, safeLimit));
+    }
+
+    public synchronized List<StructureRecord> clusterMemberRecords(String clusteringId, String clusterId) {
+        StoredClustering stored = clustering(clusteringId);
+        SimilarityCluster cluster = cluster(stored, clusterId);
+        return cluster.members().stream()
+                .map(member -> repositories.getStructure(new StructureRef(stored.repositoryId(), member.structureId())).record())
+                .toList();
+    }
+
+    public synchronized List<SimilarityCluster> clusters(String clusteringId) {
+        return clustering(clusteringId).result().clusters();
+    }
+
+    public synchronized String repositoryId(String clusteringId) {
+        return clustering(clusteringId).repositoryId();
     }
 
     public synchronized List<SimilarityClusteringRecord> listClusterings() {
@@ -132,7 +162,7 @@ public final class SimilarityClusteringAiService {
         return id;
     }
 
-    private static ClusterSummary summary(SimilarityCluster cluster) {
+    private ClusterSummary summary(String repositoryId, SimilarityCluster cluster) {
         double minSimilarity = cluster.members().stream()
                 .mapToDouble(ClusterMember::similarityToRepresentative)
                 .min()
@@ -141,21 +171,37 @@ public final class SimilarityClusteringAiService {
                 .mapToDouble(ClusterMember::similarityToRepresentative)
                 .average()
                 .orElse(1.0);
+        StructureRecord representative = repositories.getStructure(new StructureRef(repositoryId, cluster.representativeStructureId())).record();
+        List<MemberSummary> examples = cluster.members().stream()
+                .sorted(Comparator
+                        .comparingDouble(ClusterMember::similarityToRepresentative).reversed()
+                        .thenComparingInt(ClusterMember::inputIndex))
+                .limit(3)
+                .map(member -> memberSummary(repositoryId, member))
+                .toList();
         return new ClusterSummary(
                 cluster.clusterId(),
                 cluster.representativeStructureId(),
                 cluster.representativeLabel(),
+                representative.canonicalSmiles(),
                 cluster.members().size(),
                 roundSimilarity(minSimilarity),
                 roundSimilarity(meanSimilarity),
-                cluster.members().stream()
-                        .sorted(Comparator
-                                .comparingDouble(ClusterMember::similarityToRepresentative).reversed()
-                                .thenComparingInt(ClusterMember::inputIndex))
-                        .map(MemberSummary::from)
-                        .toList(),
+                examples,
                 cluster.nearestCrossNeighbors()
         );
+    }
+
+    private MemberSummary memberSummary(String repositoryId, ClusterMember member) {
+        StructureRecord record = repositories.getStructure(new StructureRef(repositoryId, member.structureId())).record();
+        return new MemberSummary(member.structureId(), member.label(), record.canonicalSmiles(), member.similarityToRepresentative());
+    }
+
+    private static SimilarityCluster cluster(StoredClustering stored, String clusterId) {
+        return stored.result().clusters().stream()
+                .filter(candidate -> candidate.clusterId().equals(clusterId))
+                .findFirst()
+                .orElseThrow(() -> new ChemOperationException("cluster_not_found", "Cluster " + clusterId + " is not part of clustering " + stored.clusteringId() + "."));
     }
 
     private static double roundSimilarity(double similarity) {
@@ -216,22 +262,21 @@ public final class SimilarityClusteringAiService {
             List<UnclusteredMolecule> unclustered
     ) {}
 
-    public record SimilarityClusterView(String clusteringId, String repositoryId, SimilarityCluster cluster) {}
+    public record SimilarityClusterView(String clusteringId, String repositoryId, ClusterSummary cluster) {}
+
+    public record ClusterMembersView(String clusteringId, String repositoryId, String clusterId, int totalMembers, List<MemberSummary> members) {}
 
     public record ClusterSummary(
             String clusterId,
             String representativeStructureId,
             String representativeLabel,
+            String representativeSmiles,
             int size,
             double minSimilarityToRepresentative,
             double meanSimilarityToRepresentative,
-            List<MemberSummary> members,
+            List<MemberSummary> exampleMembers,
             List<ClusterCrossNeighbor> nearestCrossNeighbors
     ) {}
 
-    public record MemberSummary(String structureId, String label, double similarityToRepresentative) {
-        private static MemberSummary from(ClusterMember member) {
-            return new MemberSummary(member.structureId(), member.label(), member.similarityToRepresentative());
-        }
-    }
+    public record MemberSummary(String structureId, String label, String canonicalSmiles, double similarityToRepresentative) {}
 }

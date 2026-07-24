@@ -96,39 +96,52 @@ public final class OclStructureSearchService implements StructureSearchService {
         Objects.requireNonNull(request, "request");
         String queryType = normalizeQueryType(request.queryType());
         String componentScope = normalizeSubstructureScope(request.componentScope());
-        int maxResults = positiveOrDefault(request.maxResults(), 100, "maxResults");
         int maxMatchesPerStructure = positiveOrDefault(request.maxMatchesPerStructure(), 1, "maxMatchesPerStructure");
+        String outputMode = normalizeOutputMode(request.outputMode());
+        int offset = Math.max(0, request.offset());
+        int limit = positiveOrDefault(request.limit() > 0 ? request.limit() : request.maxResults(), 50, "limit");
         QueryMolecule query = parseSubstructureQuery(request.query(), queryType);
         List<String> repositoryIds = resolveRepositoryIds(request.repositoryIds());
 
         List<SubstructureSearchMatch> matches = new ArrayList<>();
         int structuresSearched = 0;
         int matchingStructures = 0;
+        int matchingEntries = 0;
         boolean truncated = false;
 
         for (String repositoryId : repositoryIds) {
             for (StructureRecord record : allStructures(repositoryId)) {
                 structuresSearched++;
                 StoredStructure stored = repositories.getStructure(record.ref());
+                boolean includeMappings = SubstructureSearchRequest.OUTPUT_FULL.equals(outputMode) && request.includeAtomMappings();
                 List<SubstructureSearchMatch> structureMatches = searchStructure(
                         query.molecule(),
                         stored,
                         componentScope,
                         maxMatchesPerStructure,
-                        request.includeAtomMappings()
+                        includeMappings
                 );
                 if (structureMatches.isEmpty()) {
                     continue;
                 }
                 matchingStructures++;
+                if (SubstructureSearchRequest.OUTPUT_COUNT.equals(outputMode)) {
+                    continue;
+                }
                 for (SubstructureSearchMatch match : structureMatches) {
-                    if (matches.size() >= maxResults) {
+                    if (matchingEntries++ < offset) {
+                        continue;
+                    }
+                    if (matches.size() >= limit) {
                         truncated = true;
                         continue;
                     }
-                    matches.add(match);
+                    matches.add(SubstructureSearchRequest.OUTPUT_IDS.equals(outputMode) ? compactMatch(match) : match);
                 }
             }
+        }
+        if (!SubstructureSearchRequest.OUTPUT_COUNT.equals(outputMode) && matchingEntries > offset + limit) {
+            truncated = true;
         }
 
         return new SubstructureSearchResult(
@@ -136,6 +149,30 @@ public final class OclStructureSearchService implements StructureSearchService {
                 new SearchScope(repositoryIds, structuresSearched, componentScope),
                 new SearchSummary(matchingStructures, matches.size(), truncated),
                 List.copyOf(matches)
+        );
+    }
+
+    private static String normalizeOutputMode(String outputMode) {
+        if (outputMode == null || outputMode.isBlank()) {
+            return SubstructureSearchRequest.OUTPUT_FULL;
+        }
+        String normalized = outputMode.trim().toLowerCase();
+        if (SubstructureSearchRequest.OUTPUT_COUNT.equals(normalized)
+                || SubstructureSearchRequest.OUTPUT_IDS.equals(normalized)
+                || SubstructureSearchRequest.OUTPUT_FULL.equals(normalized)) {
+            return normalized;
+        }
+        throw new ChemOperationException("invalid_output_mode", "substructure output_mode must be count, ids, or full.");
+    }
+
+    private static SubstructureSearchMatch compactMatch(SubstructureSearchMatch match) {
+        return new SubstructureSearchMatch(
+                match.repositoryId(),
+                match.structureId(),
+                match.label(),
+                match.componentId(),
+                match.matchCount(),
+                List.of()
         );
     }
 

@@ -45,6 +45,44 @@ class DecompositionEngineTest {
     }
 
     @Test
+    void validatorCompilesSmartsAndChecksQueryAtomIndices() {
+        DecompositionConfig invalidSmarts = DecompositionConfig.of(List.of(
+                DecompositionRule.of("bad_smarts", null, "[NX3", Map.of(0, "amine"))
+        ));
+        DecompositionConfig outOfRange = DecompositionConfig.of(List.of(
+                DecompositionRule.of("bad_index", null, "CC", Map.of(2, "tail"))
+        ));
+
+        DecompositionConfigValidator.ValidationReport invalidSmartsReport = DecompositionConfigValidator.validateDetailed(invalidSmarts);
+        DecompositionConfigValidator.ValidationReport outOfRangeReport = DecompositionConfigValidator.validateDetailed(outOfRange);
+
+        assertFalse(invalidSmartsReport.valid());
+        assertTrue(invalidSmartsReport.problems().stream().anyMatch(problem -> problem.contains("could not be parsed")));
+        assertFalse(outOfRangeReport.valid());
+        assertTrue(outOfRangeReport.problems().stream().anyMatch(problem -> problem.contains("outside SMARTS")));
+        assertEquals(DecompositionConfigValidator.VALIDATION_SCOPE, outOfRangeReport.validationScope());
+    }
+
+    @Test
+    void validatorCatchesAmideAtomMapNumberConfusion() {
+        DecompositionConfig wrong = DecompositionConfig.of(List.of(
+                DecompositionRule.of("wrong_amide", null, "[C:1](=O)[NX3:2]", Map.of(1, "acyl", 2, "amine"))
+        ));
+        DecompositionConfig corrected = DecompositionConfig.of(List.of(
+                DecompositionRule.of("amide", null, "[C:1](=O)[NX3:2]", Map.of(0, "acyl", 2, "amine"))
+        ));
+
+        DecompositionConfigValidator.ValidationReport wrongReport = DecompositionConfigValidator.validateDetailed(wrong);
+        DecompositionConfigValidator.ValidationReport correctedReport = DecompositionConfigValidator.validateDetailed(corrected);
+
+        assertFalse(wrongReport.valid());
+        assertTrue(wrongReport.problems().stream().anyMatch(problem -> problem.contains("multiple label types")));
+        assertTrue(wrongReport.problems().stream().anyMatch(problem -> problem.contains("not SMARTS atom-map numbers")));
+        assertTrue(correctedReport.valid());
+        assertEquals(3, correctedReport.ruleDiagnostics().getFirst().queryAtomCount());
+    }
+
+    @Test
     void nWaySplitAllowsUnlabeledAtomsToInheritComponentLabel() throws Exception {
         DecompositionConfig config = DecompositionConfig.of(List.of(
                 DecompositionRule.of("split_root", null, "CCO", Map.of(0, "alkyl", 1, "linker", 2, "head"))

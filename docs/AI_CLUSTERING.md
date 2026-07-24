@@ -100,16 +100,38 @@ cluster_structures({
 Follow-up tools:
 
 - `list_clusterings`: list stored clustering runs.
-- `get_clustering`: fetch summary and paged cluster summaries.
-- `get_cluster`: fetch one full cluster with all members and nearest cross-cluster neighbors.
+- `get_clustering`: fetch compact, paged cluster summaries. Each row has size,
+  representative ID/SMILES, nearest cross-cluster neighbors, and a few example members. Full
+  member lists are deliberately omitted.
+- `get_cluster`: fetch one compact cluster summary.
+- `get_cluster_members`: drill into one cluster with `offset` and `limit`. Set
+  `create_selection:true` to store the complete cluster as a server-side selection handle, or
+  `output_target:"file"` to write larger member lists to a managed artifact.
+- `summarize_clusters_by_endpoint`: compute numeric Prism endpoint statistics per cluster without
+  returning member IDs. Use `output_target:"file"` when returning many cluster rows.
+
+Example endpoint summary:
+
+```json
+summarize_clusters_by_endpoint({
+  "clustering_id": "rough1",
+  "dataset_id": "demo",
+  "endpoint_id": "pIC50",
+  "include_singletons": false,
+  "threshold": 7.0,
+  "threshold_direction": "gte"
+})
+```
 
 A useful agent workflow is:
 
 1. Run `cluster_structures` at `0.80`.
-2. Inspect the largest representatives with `inspect_structure`.
-3. Use `get_cluster` to inspect members and cross-cluster neighbors.
-4. Use `search_substructure` to test candidate series SMARTS.
-5. Create and evaluate a series decomposition config on selected clusters or the full repository.
+2. Use `get_clustering` to rank clusters by size and representatives.
+3. Use `summarize_clusters_by_endpoint` to see SAR-relevant endpoint distributions server-side.
+4. Inspect selected representatives with `inspect_structure`.
+5. Use `get_cluster_members` only for bounded drill-down or to create a selection handle.
+6. Use `search_substructure` in count mode first to test candidate series SMARTS.
+7. Create and evaluate a series decomposition config on selected clusters or the full repository.
 
 ## Java entry points
 

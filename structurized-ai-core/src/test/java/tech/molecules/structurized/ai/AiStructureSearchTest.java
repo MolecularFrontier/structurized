@@ -192,6 +192,29 @@ class AiStructureSearchTest {
     }
 
     @Test
+    void substructureSearchSupportsCountIdsAndPagedOutputModes() {
+        TestContext ctx = context();
+        ctx.repositories.registerStructure(new RegisterStructureRequest("CCO", "session", "ethanol", "Ethanol", Map.of()));
+        ctx.repositories.registerStructure(new RegisterStructureRequest("CCN", "session", "ethylamine", "Ethylamine", Map.of()));
+
+        SubstructureSearchResult count = ctx.search.searchSubstructure(
+                new SubstructureSearchRequest("CC", "smiles", null, "all", 100, 1, true, "count", 0, 50)
+        );
+        SubstructureSearchResult ids = ctx.search.searchSubstructure(
+                new SubstructureSearchRequest("CC", "smiles", null, "all", 100, 1, true, "ids", 0, 1)
+        );
+
+        assertEquals(2, count.summary().matchingStructures());
+        assertEquals(0, count.summary().returnedStructures());
+        assertEquals(List.of(), count.matches());
+        assertEquals(2, ids.summary().matchingStructures());
+        assertEquals(1, ids.summary().returnedStructures());
+        assertTrue(ids.summary().truncated());
+        assertEquals("ethanol", ids.matches().getFirst().structureId());
+        assertEquals(List.of(), ids.matches().getFirst().atomMappings());
+    }
+
+    @Test
     void invalidScopesAndUnknownRepositoriesFailExplicitly() {
         TestContext ctx = context();
 
