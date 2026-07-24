@@ -49,7 +49,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(45, tools.size());
+        assertEquals(47, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -70,6 +70,8 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_cluster"));
         assertTrue(hasTool(tools, "get_cluster_members"));
         assertTrue(hasTool(tools, "get_selection"));
+        assertTrue(hasTool(tools, "create_endpoint_selection"));
+        assertTrue(hasTool(tools, "combine_selections"));
         assertTrue(hasTool(tools, "get_selection_members"));
         assertTrue(hasTool(tools, "summarize_selection_by_endpoint"));
         assertTrue(hasTool(tools, "summarize_clusters_by_endpoint"));
@@ -301,6 +303,48 @@ class McpJsonRpcHandlerTest {
         assertTrue(Files.exists(fragmentArtifact));
         assertTrue(fragmentFile.at("/result/structuredContent/rows").isMissingNode());
         assertTrue(mapper.readTree(fragmentArtifact.toFile()).at("/rows/0/examples/0/atomIds").isArray());
+
+        JsonNode searchSelection = call(handler, request(10, "search_substructure", """
+                {"query":"CCO","query_type":"smiles","repository_ids":["session"],"output_mode":"ids","create_selection":true,"selection_id":"alcohols"}
+                """));
+        assertEquals("alcohols", searchSelection.at("/result/structuredContent/selection/selectionId").asText());
+        call(handler, request(11, "search_substructure", """
+                {"query":"C","query_type":"smiles","repository_ids":["session"],"output_mode":"ids","create_selection":true,"selection_id":"carbon_hits"}
+                """));
+        JsonNode combined = call(handler, request(12, "combine_selections", """
+                {"operation":"intersect","selection_ids":["alcohols","carbon_hits"],"selection_id":"alcohol_carbon_hits"}
+                """));
+        assertEquals("alcohol_carbon_hits", combined.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, combined.at("/result/structuredContent/summary/memberCount").asInt());
+        JsonNode subtract = call(handler, request(13, "combine_selections", """
+                {"operation":"subtract","selection_ids":["carbon_hits","alcohols"],"selection_id":"carbon_without_alcohols"}
+                """));
+        assertEquals(1, subtract.at("/result/structuredContent/summary/memberCount").asInt());
+        assertEquals("methane", subtract.at("/result/structuredContent/examples/0/structureId").asText());
+
+        JsonNode selectedEvaluation = call(handler, request(14, "evaluate_decomposition", """
+                {"evaluation_id":"eval_selection","config_id":"demo_split","selection_id":"alcohol_carbon_hits"}
+                """));
+        assertEquals(1, selectedEvaluation.at("/result/structuredContent/moleculeCount").asInt());
+        assertEquals(1, selectedEvaluation.at("/result/structuredContent/successfulCount").asInt());
+        assertEquals("session", selectedEvaluation.at("/result/structuredContent/repositoryId").asText());
+
+        JsonNode selectedEvaluationWithRepository = call(handler, request(15, "evaluate_decomposition", """
+                {"evaluation_id":"eval_selection_with_repo","config_id":"demo_split","repository_id":"session","selection_id":"alcohols"}
+                """));
+        assertEquals(1, selectedEvaluationWithRepository.at("/result/structuredContent/moleculeCount").asInt());
+
+        JsonNode mixedScope = call(handler, request(16, "evaluate_decomposition", """
+                {"evaluation_id":"eval_bad_scope","config_id":"demo_split","selection_id":"alcohols","structure_ids":["butanol"]}
+                """));
+        assertTrue(mixedScope.at("/result/isError").asBoolean());
+        assertEquals("invalid_decomposition_scope", mixedScope.at("/result/structuredContent/code").asText());
+
+        JsonNode mismatchedRepository = call(handler, request(17, "evaluate_decomposition", """
+                {"evaluation_id":"eval_bad_repo","config_id":"demo_split","repository_id":"other","selection_id":"alcohols"}
+                """));
+        assertTrue(mismatchedRepository.at("/result/isError").asBoolean());
+        assertEquals("selection_repository_mismatch", mismatchedRepository.at("/result/structuredContent/code").asText());
     }
 
     @Test
@@ -423,12 +467,38 @@ class McpJsonRpcHandlerTest {
         assertTrue(Files.exists(selectionArtifact));
         assertEquals("CMP-001", mapper.readTree(selectionArtifact.toFile()).at("/members/0/structureId").asText());
 
-        call(handler, request(17, "cluster_structures", "{\"clustering_id\":\"prism_clusters\",\"repository_id\":\"" + repositoryId + "\",\"threshold\":0.0}"));
-        JsonNode clusterStats = call(handler, request(18, "summarize_clusters_by_endpoint", "{\"clustering_id\":\"prism_clusters\",\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"output_target\":\"file\",\"output_name\":\"summaries/clusters.json\"}"));
+        JsonNode potent = call(handler, request(17, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0,\"selection_id\":\"potent\"}"));
+        assertEquals("potent", potent.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, potent.at("/result/structuredContent/summary/memberCount").asInt());
+        assertEquals("CMP-001", potent.at("/result/structuredContent/examples/0/structureId").asText());
+
+        JsonNode potentPyridines = call(handler, request(18, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"base_selection_id\":\"pyridines\",\"endpoint_id\":\"pIC50\",\"operator\":\"gt\",\"value\":7.0,\"selection_id\":\"potent_pyridines\"}"));
+        assertEquals("potent_pyridines", potentPyridines.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, potentPyridines.at("/result/structuredContent/summary/memberCount").asInt());
+
+        JsonNode intersection = call(handler, request(19, "combine_selections", "{\"operation\":\"intersect\",\"selection_ids\":[\"potent\",\"pyridines\"],\"selection_id\":\"potent_pyridine_intersection\"}"));
+        assertEquals("potent_pyridine_intersection", intersection.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, intersection.at("/result/structuredContent/summary/memberCount").asInt());
+
+        JsonNode missingScope = call(handler, request(20, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0}"));
+        assertTrue(missingScope.at("/result/isError").asBoolean());
+        assertEquals("invalid_endpoint_selection_scope", missingScope.at("/result/structuredContent/code").asText());
+
+        JsonNode repositoryMismatch = call(handler, request(21, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"other\",\"base_selection_id\":\"pyridines\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0}"));
+        assertTrue(repositoryMismatch.at("/result/isError").asBoolean());
+        assertEquals("selection_repository_mismatch", repositoryMismatch.at("/result/structuredContent/code").asText());
+
+        JsonNode badOperator = call(handler, request(22, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"operator\":\"approximately\",\"value\":7.0}"));
+        assertTrue(badOperator.at("/result/isError").asBoolean());
+        assertEquals("invalid_endpoint_filter_operator", badOperator.at("/result/structuredContent/code").asText());
+
+        call(handler, request(23, "cluster_structures", "{\"clustering_id\":\"prism_clusters\",\"repository_id\":\"" + repositoryId + "\",\"threshold\":0.0}"));
+        JsonNode clusterStats = call(handler, request(24, "summarize_clusters_by_endpoint", "{\"clustering_id\":\"prism_clusters\",\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"output_target\":\"file\",\"output_name\":\"summaries/clusters.json\"}"));
         Path clusterStatsArtifact = Path.of(clusterStats.at("/result/structuredContent/artifact/path").asText());
         assertTrue(Files.exists(clusterStatsArtifact));
         assertEquals("pIC50", mapper.readTree(clusterStatsArtifact.toFile()).at("/clusters/0/endpoint/endpointId").asText());
     }
+
 
     @Test
     void unsafeArtifactOutputNameReturnsToolError() throws Exception {

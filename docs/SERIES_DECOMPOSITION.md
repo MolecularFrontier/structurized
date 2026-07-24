@@ -193,8 +193,48 @@ evaluate_decomposition({
 })
 ```
 
+For scoped analysis, use server-side selections instead of passing raw structure IDs. Selections can come from structural searches, cluster-member drill-downs, endpoint filters, or combinations of existing selections:
+
+```json
+search_substructure({
+  "query": "CCO",
+  "repository_ids": ["session"],
+  "output_mode": "ids",
+  "create_selection": true,
+  "selection_id": "alcohol_hits"
+})
+
+create_endpoint_selection({
+  "dataset_id": "project1",
+  "repository_id": "session",
+  "endpoint_id": "primary_pIC50",
+  "operator": "gte",
+  "value": 7.0,
+  "selection_id": "potent_primary"
+})
+
+combine_selections({
+  "operation": "intersect",
+  "selection_ids": ["alcohol_hits", "potent_primary"],
+  "selection_id": "potent_alcohol_hits"
+})
+
+evaluate_decomposition({
+  "evaluation_id": "eval_alcohol_hits",
+  "config_id": "demo_split",
+  "selection_id": "potent_alcohol_hits"
+})
+```
+
 Useful follow-up tools:
 
+- `create_endpoint_selection`: create a reusable selection from a numeric PRISM endpoint mean filter
+  using `gt`, `gte`, `lt`, `lte`, or `eq`; it can scan a materialized repository or filter an
+  existing `base_selection_id`.
+- `combine_selections`: create a new selection by `union`/`merge`, `intersect`, or `subtract` over
+  existing selection handles.
+- `evaluate_decomposition`: evaluate a full repository, explicit `structure_ids`, or a server-side
+  `selection_id` created by search, endpoint-filter, cluster-member, or selection-combination tools.
 - `get_decomposition_evaluation`: summary and optional molecule-level result list.
 - `get_decomposition_result`: full tree for one molecule.
 - `get_decomposition_failures`: non-successful molecules grouped by status.
@@ -214,8 +254,8 @@ Example R-group SAR histogram:
 get_decomposition_fragment_histogram({
   "evaluation_id": "eval1",
   "path": "root.tail.cap",
-  "dataset_id": "mc2r",
-  "endpoint_id": "hMC2R_pIC50",
+  "dataset_id": "project1",
+  "endpoint_id": "primary_pIC50",
   "threshold": 7.0,
   "threshold_direction": "gte",
   "limit": 25

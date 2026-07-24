@@ -252,6 +252,16 @@ final class McpChemistryTools {
                         requiredString(args, "dataset_id"),
                         stringList(args, "subject_ids"),
                         stringList(args, "endpoint_ids")));
+        add(result, "create_endpoint_selection", "Creates a server-side selection from numeric Prism endpoint mean filters, optionally scoped to an existing selection; use this before combining chemotype and potency/property subsets.", schema(
+                required("dataset_id", "endpoint_id", "operator", "value"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                prop("repository_id", "string", "Repository ID to scan. Required unless base_selection_id is provided."),
+                prop("base_selection_id", "string", "Optional existing selection to filter instead of scanning a repository."),
+                prop("endpoint_id", "string", "Numeric Prism endpoint ID."),
+                prop("operator", "string", "gt, gte, lt, lte, or eq."),
+                prop("value", "number", "Numeric threshold compared against endpoint mean."),
+                prop("selection_id", "string", "Optional output selection ID.")),
+                this::createEndpointSelection);
         add(result, "materialize_prism_subject_set", "Materializes a PRISM subject set into a normal AI chemistry repository.", schema(
                 required("dataset_id"),
                 prop("dataset_id", "string", "Loaded PRISM dataset ID."),
@@ -315,6 +325,15 @@ final class McpChemistryTools {
                 required("selection_id"),
                 prop("selection_id", "string", "Stored selection ID.")),
                 args -> selections.getSelection(requiredString(args, "selection_id")));
+        add(result, "combine_selections", "Creates a new server-side selection from existing selections using union/merge, intersect, or subtract; returns metadata and a few examples.", schema(
+                required("operation", "selection_ids"),
+                prop("operation", "string", "union, merge, intersect, or subtract."),
+                arrayProp("selection_ids", "string", "Input selection IDs. For subtract, the first selection is the minuend."),
+                prop("selection_id", "string", "Optional output selection ID.")),
+                args -> selections.combineSelections(
+                        optionalString(args, "selection_id", null),
+                        requiredString(args, "operation"),
+                        stringList(args, "selection_ids")));
         add(result, "get_selection_members", "Returns paged members of a server-side structure selection.", schema(
                 required("selection_id"),
                 prop("selection_id", "string", "Stored selection ID."),
@@ -374,17 +393,14 @@ final class McpChemistryTools {
                 args -> decompositions.getConfig(
                         requiredString(args, "config_id"),
                         optionalBoolean(args, "include_config", true)));
-        add(result, "evaluate_decomposition", "Evaluates a decomposition config against molecules and reports coverage, no-match, non-unique, and invalid-assignment outcomes.", schema(
-                required("config_id", "repository_id"),
+        add(result, "evaluate_decomposition", "Evaluates a decomposition config against a repository, explicit structure_ids, or a server-side selection_id and reports coverage, no-match, non-unique, and invalid-assignment outcomes.", schema(
+                required("config_id"),
                 prop("evaluation_id", "string", "Optional evaluation ID."),
                 prop("config_id", "string", "Stored decomposition config ID."),
-                prop("repository_id", "string", "Repository ID to evaluate."),
-                arrayProp("structure_ids", "string", "Optional selected structure IDs.")),
-                args -> decompositions.evaluate(
-                        optionalString(args, "evaluation_id", null),
-                        requiredString(args, "config_id"),
-                        requiredString(args, "repository_id"),
-                        optionalStringList(args, "structure_ids")));
+                prop("repository_id", "string", "Repository ID to evaluate. Required unless selection_id is provided."),
+                arrayProp("structure_ids", "string", "Optional selected structure IDs for repository mode."),
+                prop("selection_id", "string", "Optional server-side structure selection to evaluate instead of raw structure_ids.")),
+                this::evaluateDecomposition);
         add(result, "get_decomposition_evaluation", "Returns decomposition evaluation summary and optional paged molecule results.", schema(
                 required("evaluation_id"),
                 prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
@@ -445,6 +461,35 @@ final class McpChemistryTools {
     }
 
 
+    private DecompositionAiService.DecompositionEvaluationRecord evaluateDecomposition(ObjectNode args) {
+        String evaluationId = optionalString(args, "evaluation_id", null);
+        String configId = requiredString(args, "config_id");
+        String repositoryId = optionalString(args, "repository_id", null);
+        String selectionId = optionalString(args, "selection_id", null);
+        List<String> structureIds = optionalStringList(args, "structure_ids");
+
+        if (selectionId != null && !selectionId.isBlank()) {
+            if (structureIds != null && !structureIds.isEmpty()) {
+                throw new ChemOperationException("invalid_decomposition_scope", "selection_id and structure_ids cannot be provided together.");
+            }
+            SelectionAiService.StoredSelectionData selection = selections.selectionData(selectionId);
+            String selectionRepositoryId = selection.summary().repositoryId();
+            if (repositoryId != null && !repositoryId.isBlank() && !repositoryId.trim().equals(selectionRepositoryId)) {
+                throw new ChemOperationException("selection_repository_mismatch", "selection_id " + selectionId + " belongs to repository " + selectionRepositoryId + ", not " + repositoryId + ".");
+            }
+            List<String> selectedStructureIds = selection.members().stream()
+                    .map(SelectionMember::structureId)
+                    .toList();
+            return decompositions.evaluate(evaluationId, configId, selectionRepositoryId, selectedStructureIds);
+        }
+
+        if (repositoryId == null || repositoryId.isBlank()) {
+            throw new ChemOperationException("invalid_decomposition_scope", "repository_id is required unless selection_id is provided.");
+        }
+        return decompositions.evaluate(evaluationId, configId, repositoryId, structureIds);
+    }
+
+
     private ToolGuide toolGuide(ObjectNode args) {
         String topic = optionalString(args, "topic", "overview");
         String normalized = topic == null || topic.isBlank() ? "overview" : topic.trim().toLowerCase();
@@ -452,27 +497,27 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) -> summarize_selection_by_endpoint; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint or evaluate_decomposition(selection_id); create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
                     # Payload Hygiene
                     search_substructure defaults to output_mode:count. Request output_mode:ids for compact rows and output_mode:full only when atom mappings are needed.
                     get_clustering and get_cluster are summaries; get_cluster_members and get_selection_members are paged drill-down tools.
-                    Prefer create_selection:true plus summarize_selection_by_endpoint when analyzing endpoint distributions for search hits or cluster members.
+                    Prefer create_selection:true plus summarize_selection_by_endpoint when analyzing endpoint distributions for search hits or cluster members. Use create_endpoint_selection for numeric potency/property filters without fetching value rows. Use combine_selections for union/merge, intersect, and subtract without copying IDs into context. evaluate_decomposition also accepts selection_id, avoiding raw ID lists for scoped decomposition.
                     """;
             case "prism_workflow" -> """
                     # Prism Workflow
                     Open a TSV bundle with open_prism_dataset, inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
                     Use repository IDs returned by materialize_prism_subject_set for structure search, clustering, and decomposition evaluation.
-                    Endpoint summaries use Prism subject IDs preserved in materialized structure fields.
+                    Endpoint summaries and create_endpoint_selection use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property subsets with operators gt/gte/lt/lte/eq and can scan a repository or filter an existing selection.
                     """;
             case "clustering_workflow" -> """
                     # Clustering Workflow
                     Run cluster_structures with SkelSpheres threshold around 0.75-0.85 for rough chemotype neighborhoods.
                     Use get_clustering for representative-led summaries, then summarize_clusters_by_endpoint to compare endpoint distributions without member payloads. By default, cluster endpoint summaries return a paged table of non-singleton clusters only.
                     Pass include_singletons:true only when auditing singleton behavior. Use output_target:file for complete per-cluster endpoint tables.
-                    Use get_cluster_members with create_selection:true for a cluster-specific selection, or output_target:file for a larger member list.
+                    Use get_cluster_members with create_selection:true for a cluster-specific selection, combine_selections to intersect clusters with structural searches, or output_target:file for a larger member list.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules
@@ -481,6 +526,7 @@ final class McpChemistryTools {
                     Bonds between differently labeled adjacent matched atoms are cut. After cuts, every resulting component must contain exactly one label type; unlabeled atoms are absorbed into their connected labeled component.
                     Amide example: for [C:1](=O)[NX3:2], label the carbon and nitrogen query atoms, e.g. {"0":"acyl","2":"amine"}; leave oxygen unlabeled. The common {"1":"acyl","2":"amine"} labels oxygen and nitrogen and leaves carbon unlabeled, producing one component with multiple label types.
                     validate_decomposition_config checks schema, SMARTS compilation, label index range, and query-graph label partitioning. evaluate_decomposition is still required for molecule-specific matches, ambiguity, and coverage.
+                    evaluate_decomposition can evaluate a whole repository, explicit structure_ids, or a server-side selection_id from search_substructure/create_selection workflows.
                     After evaluation, use get_decomposition_fragment_summary to list terminal paths, then get_decomposition_fragment_histogram for ranked distinct fragments at one path or label, optionally joined to Prism endpoint stats.
                     """;
             case "artifact_output" -> """
@@ -568,6 +614,100 @@ final class McpChemistryTools {
                 sourceId,
                 List.copyOf(records.values())
         );
+    }
+
+    private SelectionAiService.SelectionView createEndpointSelection(ObjectNode args) {
+        String datasetId = requiredString(args, "dataset_id");
+        String endpointId = requiredString(args, "endpoint_id");
+        String operator = normalizeEndpointFilterOperator(requiredString(args, "operator"));
+        double threshold = requiredDouble(args, "value");
+        String baseSelectionId = optionalString(args, "base_selection_id", null);
+        String repositoryId = optionalString(args, "repository_id", null);
+
+        List<StructureRecord> candidates;
+        String repoId;
+        if (baseSelectionId != null && !baseSelectionId.isBlank()) {
+            SelectionAiService.StoredSelectionData base = selections.selectionData(baseSelectionId);
+            repoId = base.summary().repositoryId();
+            if (repositoryId != null && !repositoryId.isBlank() && !repositoryId.trim().equals(repoId)) {
+                throw new ChemOperationException("selection_repository_mismatch", "base_selection_id " + baseSelectionId + " belongs to repository " + repoId + ", not " + repositoryId + ".");
+            }
+            candidates = base.members().stream()
+                    .map(member -> repositories.getStructure(new StructureRef(repoId, member.structureId())).record())
+                    .toList();
+        } else {
+            if (repositoryId == null || repositoryId.isBlank()) {
+                throw new ChemOperationException("invalid_endpoint_selection_scope", "repository_id is required unless base_selection_id is provided.");
+            }
+            repoId = repositoryId.trim();
+            candidates = allRepositoryRecords(repoId);
+        }
+
+        List<String> subjectIds = subjectIdsFromRecords(candidates);
+        Map<String, Double> numericMeansBySubject = new LinkedHashMap<>();
+        if (!subjectIds.isEmpty()) {
+            for (PrismEndpointValue value : prism.getEndpointValues(datasetId, subjectIds, List.of(endpointId))) {
+                if (value.result() instanceof NumericResult numeric
+                        && numeric.getState() == NumericState.VALUE
+                        && numeric.getMean() != null) {
+                    numericMeansBySubject.put(value.subjectId(), numeric.getMean());
+                }
+            }
+        }
+
+        List<StructureRecord> matches = candidates.stream()
+                .filter(record -> {
+                    String subjectId = record.fields().get("prism.subject_id");
+                    Double mean = subjectId == null ? null : numericMeansBySubject.get(subjectId);
+                    return mean != null && endpointFilterMatches(mean, operator, threshold);
+                })
+                .toList();
+        String sourceId = endpointId + " " + operator + " " + threshold
+                + (baseSelectionId == null || baseSelectionId.isBlank() ? "" : " in " + baseSelectionId);
+        SelectionAiService.SelectionRecord record = selections.createSelectionFromRecords(
+                optionalString(args, "selection_id", null),
+                repoId,
+                "endpoint_filter",
+                sourceId,
+                matches);
+        return selections.getSelection(record.selectionId());
+    }
+
+    private List<StructureRecord> allRepositoryRecords(String repositoryId) {
+        List<StructureRecord> records = new ArrayList<>();
+        int offset = 0;
+        while (true) {
+            List<StructureRecord> page = repositories.listStructures(repositoryId, offset, 500);
+            if (page.isEmpty()) {
+                break;
+            }
+            records.addAll(page);
+            offset += page.size();
+        }
+        return List.copyOf(records);
+    }
+
+    private static String normalizeEndpointFilterOperator(String operator) {
+        String normalized = operator == null ? "" : operator.trim().toLowerCase();
+        if (!"gt".equals(normalized)
+                && !"gte".equals(normalized)
+                && !"lt".equals(normalized)
+                && !"lte".equals(normalized)
+                && !"eq".equals(normalized)) {
+            throw new ChemOperationException("invalid_endpoint_filter_operator", "operator must be gt, gte, lt, lte, or eq.");
+        }
+        return normalized;
+    }
+
+    private static boolean endpointFilterMatches(double mean, String operator, double threshold) {
+        return switch (operator) {
+            case "gt" -> mean > threshold;
+            case "gte" -> mean >= threshold;
+            case "lt" -> mean < threshold;
+            case "lte" -> mean <= threshold;
+            case "eq" -> Double.compare(mean, threshold) == 0;
+            default -> false;
+        };
     }
 
     private Object getClusterMembers(ObjectNode args) {
@@ -1106,6 +1246,17 @@ final class McpChemistryTools {
             throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be a boolean.");
         }
         return node.asBoolean();
+    }
+
+    private static double requiredDouble(ObjectNode args, String name) {
+        JsonNode node = args.get(name);
+        if (node == null || node.isNull()) {
+            throw new ChemOperationException("invalid_arguments", "Missing required argument: " + name);
+        }
+        if (!node.isNumber()) {
+            throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be a number.");
+        }
+        return node.asDouble();
     }
 
     private static Double optionalDouble(ObjectNode args, String name, Double defaultValue) {

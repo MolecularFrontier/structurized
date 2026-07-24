@@ -93,6 +93,45 @@ public final class SelectionAiService {
         return new SelectionMembersView(stored.toRecord(), page(stored.members(), safeOffset, safeLimit));
     }
 
+    public synchronized SelectionView combineSelections(
+            String selectionId,
+            String operation,
+            List<String> selectionIds
+    ) {
+        String op = normalizeOperation(operation);
+        if (selectionIds == null || selectionIds.size() < 2) {
+            throw new ChemOperationException("invalid_selection_combination", "At least two selection_ids are required.");
+        }
+        List<StoredSelection> sources = selectionIds.stream().map(this::selection).toList();
+        String repositoryId = sources.getFirst().repositoryId();
+        for (StoredSelection source : sources) {
+            if (!repositoryId.equals(source.repositoryId())) {
+                throw new ChemOperationException("selection_repository_mismatch", "All selections must belong to the same repository.");
+            }
+        }
+
+        String id = normalizeId(selectionId == null || selectionId.isBlank() ? generatedSelectionId() : selectionId, "selection_id");
+        if (selections.containsKey(id)) {
+            throw new ChemOperationException("duplicate_selection", "Selection " + id + " already exists.");
+        }
+
+        List<SelectionMember> members = switch (op) {
+            case "union" -> union(sources);
+            case "intersect" -> intersect(sources);
+            case "subtract" -> subtract(sources);
+            default -> throw new IllegalStateException("Unsupported selection operation: " + op);
+        };
+        StoredSelection stored = new StoredSelection(
+                id,
+                repositoryId,
+                "selection_" + op,
+                String.join(",", selectionIds),
+                members
+        );
+        selections.put(id, stored);
+        return new SelectionView(stored.toRecord(), examples(stored.members(), 3));
+    }
+
     public synchronized List<SelectionMember> allMembers(String selectionId) {
         return selection(selectionId).members();
     }
@@ -120,6 +159,59 @@ public final class SelectionAiService {
 
     private static SelectionMember member(StructureRecord record) {
         return new SelectionMember(record.structureId(), record.label(), record.canonicalSmiles(), record.fields());
+    }
+
+    private static List<SelectionMember> union(List<StoredSelection> sources) {
+        Map<String, SelectionMember> byStructureId = new LinkedHashMap<>();
+        for (StoredSelection source : sources) {
+            for (SelectionMember member : source.members()) {
+                byStructureId.putIfAbsent(member.structureId(), member);
+            }
+        }
+        return List.copyOf(byStructureId.values());
+    }
+
+    private static List<SelectionMember> intersect(List<StoredSelection> sources) {
+        List<SelectionMember> firstMembers = union(List.of(sources.getFirst()));
+        List<Map<String, SelectionMember>> remaining = sources.subList(1, sources.size()).stream()
+                .map(source -> indexByStructureId(source.members()))
+                .toList();
+        return firstMembers.stream()
+                .filter(member -> remaining.stream().allMatch(index -> index.containsKey(member.structureId())))
+                .toList();
+    }
+
+    private static List<SelectionMember> subtract(List<StoredSelection> sources) {
+        List<SelectionMember> firstMembers = union(List.of(sources.getFirst()));
+        Map<String, SelectionMember> removed = new LinkedHashMap<>();
+        for (StoredSelection source : sources.subList(1, sources.size())) {
+            removed.putAll(indexByStructureId(source.members()));
+        }
+        return firstMembers.stream()
+                .filter(member -> !removed.containsKey(member.structureId()))
+                .toList();
+    }
+
+    private static Map<String, SelectionMember> indexByStructureId(List<SelectionMember> members) {
+        Map<String, SelectionMember> result = new LinkedHashMap<>();
+        for (SelectionMember member : members) {
+            result.putIfAbsent(member.structureId(), member);
+        }
+        return result;
+    }
+
+    private static String normalizeOperation(String operation) {
+        if (operation == null || operation.isBlank()) {
+            throw new ChemOperationException("invalid_selection_operation", "operation must be union, merge, intersect, or subtract.");
+        }
+        String normalized = operation.trim().toLowerCase();
+        if ("merge".equals(normalized)) {
+            return "union";
+        }
+        if (!"union".equals(normalized) && !"intersect".equals(normalized) && !"subtract".equals(normalized)) {
+            throw new ChemOperationException("invalid_selection_operation", "operation must be union, merge, intersect, or subtract.");
+        }
+        return normalized;
     }
 
     private static List<SelectionMember> examples(List<SelectionMember> members, int limit) {
