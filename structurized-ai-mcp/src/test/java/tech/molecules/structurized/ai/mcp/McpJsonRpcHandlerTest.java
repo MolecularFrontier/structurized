@@ -49,7 +49,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(47, tools.size());
+        assertEquals(49, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -71,9 +71,11 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_cluster_members"));
         assertTrue(hasTool(tools, "get_selection"));
         assertTrue(hasTool(tools, "create_endpoint_selection"));
+        assertTrue(hasTool(tools, "create_subject_measurement_date_selection"));
         assertTrue(hasTool(tools, "combine_selections"));
         assertTrue(hasTool(tools, "get_selection_members"));
         assertTrue(hasTool(tools, "summarize_selection_by_endpoint"));
+        assertTrue(hasTool(tools, "export_selection_table"));
         assertTrue(hasTool(tools, "summarize_clusters_by_endpoint"));
         assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
         assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
@@ -399,6 +401,76 @@ class McpJsonRpcHandlerTest {
     }
 
     @Test
+    void exportSelectionTableWritesTsvWithEndpointsAndDecompositionColumns() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = prismDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(2, "register_structure", """
+                {"smiles":"CCCO","structure_id":"butanol_a","label":"Butanol A","fields":{"prism.subject_id":"CMP-001","batch":"A1"}}
+                """));
+        call(handler, request(3, "register_structure", """
+                {"smiles":"CCCO","structure_id":"butanol_b","label":"Butanol B","fields":{"prism.subject_id":"CMP-002","batch":"B1"}}
+                """));
+        call(handler, request(4, "search_substructure", """
+                {"query":"CCO","query_type":"smiles","repository_ids":["session"],"output_mode":"ids","create_selection":true,"selection_id":"alcohol_export"}
+                """));
+        call(handler, request(5, "create_decomposition_config", """
+                {
+                  "config_id":"export_split",
+                  "config":{
+                    "version":"series-decomposition-v1",
+                    "rules":[{"id":"split_root","labelToSplit":null,"smarts":"CCO","atomLabels":{"0":"alkyl","1":"linker","2":"head"}}]
+                  }
+                }
+                """));
+        call(handler, request(6, "evaluate_decomposition", """
+                {"evaluation_id":"export_eval","config_id":"export_split","selection_id":"alcohol_export"}
+                """));
+
+        JsonNode exported = call(handler, request(7, "export_selection_table", """
+                {"selection_id":"alcohol_export","dataset_id":"demo","endpoint_ids":["pIC50"],"decomposition_evaluation_id":"export_eval","include_fields":true,"include_subject_measurement_dates":true,"output_name":"exports/alcohols.tsv"}
+                """));
+        assertEquals(2, exported.at("/result/structuredContent/summary/rowCount").asInt());
+        assertEquals(2, exported.at("/result/structuredContent/summary/selectedStructureCount").asInt());
+        assertEquals("tsv", exported.at("/result/structuredContent/artifact/format").asText());
+        assertTrue(exported.at("/result/structuredContent/summary/columns").toString().contains("decomp_root_alkyl_fragment_smiles"));
+        Path artifact = Path.of(exported.at("/result/structuredContent/artifact/path").asText());
+        String tsv = Files.readString(artifact);
+        assertTrue(tsv.startsWith("structure_id	repository_id	subject_id"));
+        assertTrue(tsv.contains("subject_first_measurement	subject_last_measurement	subject_measurement_endpoint_count"));
+        assertTrue(tsv.contains("endpoint_id	result_type	numeric_state	value"));
+        assertTrue(tsv.contains("first_measurement	last_measurement"));
+        assertTrue(tsv.contains("decomposition_status"));
+        assertTrue(tsv.contains("butanol_a	session	CMP-001"));
+        assertTrue(tsv.contains("2025-01-01T08:00:00Z	2026-01-06T09:00:00Z	2"));
+        assertTrue(tsv.contains("pIC50	NUMERIC	VALUE	7.2"));
+        assertTrue(tsv.contains("2026-01-05T08:00:00Z	2026-01-06T09:00:00Z"));
+        assertEquals(3, tsv.split("\n").length);
+
+        JsonNode structureOnly = call(handler, request(8, "export_selection_table", """
+                {"selection_id":"alcohol_export","include_smiles":false,"output_name":"exports/alcohols-structures.tsv"}
+                """));
+        assertEquals(2, structureOnly.at("/result/structuredContent/summary/rowCount").asInt());
+        assertFalse(structureOnly.at("/result/structuredContent/summary/columns").toString().contains("canonical_smiles"));
+
+        call(handler, request(9, "create_repository", """
+                {"repository_id":"other","label":"Other"}
+                """));
+        call(handler, request(10, "register_structure", """
+                {"smiles":"CCCO","repository_id":"other","structure_id":"other_butanol"}
+                """));
+        call(handler, request(11, "evaluate_decomposition", """
+                {"evaluation_id":"other_eval","config_id":"export_split","repository_id":"other"}
+                """));
+        JsonNode mismatch = call(handler, request(12, "export_selection_table", """
+                {"selection_id":"alcohol_export","decomposition_evaluation_id":"other_eval","output_name":"exports/mismatch.tsv"}
+                """));
+        assertTrue(mismatch.at("/result/isError").asBoolean());
+        assertEquals("selection_repository_mismatch", mismatch.at("/result/structuredContent/code").asText());
+    }
+
+    @Test
     void canRegisterInspectAndSearchThroughToolCalls() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
 
@@ -492,6 +564,21 @@ class McpJsonRpcHandlerTest {
         assertTrue(badOperator.at("/result/isError").asBoolean());
         assertEquals("invalid_endpoint_filter_operator", badOperator.at("/result/structuredContent/code").asText());
 
+        JsonNode recentEndpoint = call(handler, request(25, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"measurement_date_field\":\"last\",\"measured_after\":\"2026-06-30\",\"selection_id\":\"recent_pic50\"}"));
+        assertEquals("recent_pic50", recentEndpoint.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, recentEndpoint.at("/result/structuredContent/summary/memberCount").asInt());
+        assertEquals("CMP-002", recentEndpoint.at("/result/structuredContent/examples/0/structureId").asText());
+
+        JsonNode recentSubjectFirst = call(handler, request(26, "create_subject_measurement_date_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"subject_date_field\":\"first\",\"measured_after\":\"2026-06-01\",\"selection_id\":\"new_subjects\"}"));
+        assertEquals("new_subjects", recentSubjectFirst.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, recentSubjectFirst.at("/result/structuredContent/summary/memberCount").asInt());
+        assertEquals("CMP-002", recentSubjectFirst.at("/result/structuredContent/examples/0/structureId").asText());
+
+        JsonNode oldPic50SubjectLast = call(handler, request(27, "create_subject_measurement_date_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_ids\":[\"pIC50\"],\"subject_date_field\":\"last\",\"measured_before\":\"2026-02-01\",\"selection_id\":\"old_pic50_subjects\"}"));
+        assertEquals("old_pic50_subjects", oldPic50SubjectLast.at("/result/structuredContent/summary/selectionId").asText());
+        assertEquals(1, oldPic50SubjectLast.at("/result/structuredContent/summary/memberCount").asInt());
+        assertEquals("CMP-001", oldPic50SubjectLast.at("/result/structuredContent/examples/0/structureId").asText());
+
         call(handler, request(23, "cluster_structures", "{\"clustering_id\":\"prism_clusters\",\"repository_id\":\"" + repositoryId + "\",\"threshold\":0.0}"));
         JsonNode clusterStats = call(handler, request(24, "summarize_clusters_by_endpoint", "{\"clustering_id\":\"prism_clusters\",\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"output_target\":\"file\",\"output_name\":\"summaries/clusters.json\"}"));
         Path clusterStatsArtifact = Path.of(clusterStats.at("/result/structuredContent/artifact/path").asText());
@@ -509,6 +596,11 @@ class McpJsonRpcHandlerTest {
 
         assertTrue(response.at("/result/isError").asBoolean());
         assertEquals("invalid_artifact_path", response.at("/result/structuredContent/code").asText());
+
+        call(handler, request(3, "search_substructure", "{\"query\":\"CC\",\"output_mode\":\"ids\",\"create_selection\":true,\"selection_id\":\"unsafe_export_selection\"}"));
+        JsonNode exportResponse = call(handler, request(4, "export_selection_table", "{\"selection_id\":\"unsafe_export_selection\",\"output_name\":\"../bad.tsv\"}"));
+        assertTrue(exportResponse.at("/result/isError").asBoolean());
+        assertEquals("invalid_artifact_path", exportResponse.at("/result/structuredContent/code").asText());
     }
 
     @Test
@@ -539,6 +631,7 @@ class McpJsonRpcHandlerTest {
         Files.writeString(dir.resolve("endpoints.prism.tsv"), String.join("\n",
                 "endpoint_id\tname\tpath\tdatatype\tendpoint_type\tevaluation_mode\tunit\tscale",
                 "pIC50\tpIC50\tassay/pIC50\tNUMERIC\tMEASURED\tIMMEDIATE\tpIC50\tLOG",
+                "logD\tlogD\tproperties/logD\tNUMERIC\tMEASURED\tIMMEDIATE\t\tABSOLUTE",
                 ""
         ));
         Files.writeString(dir.resolve("subjects.prism.tsv"), String.join("\n",
@@ -548,9 +641,11 @@ class McpJsonRpcHandlerTest {
                 ""
         ));
         Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
-                "subject_id\tendpoint_id\tstate\tmean\tn",
-                "CMP-001\tpIC50\tVALUE\t7.2\t3",
-                "CMP-002\tpIC50\tVALUE\t6.1\t1",
+                "subject_id\tendpoint_id\tstate\tmean\tn\tfirst_measurement\tlast_measurement",
+                "CMP-001\tpIC50\tVALUE\t7.2\t3\t2026-01-05T08:00:00Z\t2026-01-06T09:00:00Z",
+                "CMP-001\tlogD\tVALUE\t2.5\t1\t2025-01-01T08:00:00Z\t2025-01-03T08:00:00Z",
+                "CMP-002\tpIC50\tVALUE\t6.1\t1\t2026-07-01T08:00:00Z\t2026-07-02T09:00:00Z",
+                "CMP-002\tlogD\tVALUE\t3.1\t1\t2026-07-03T08:00:00Z\t2026-07-04T09:00:00Z",
                 ""
         ));
         return dir;

@@ -235,6 +235,8 @@ Useful follow-up tools:
   existing selection handles.
 - `evaluate_decomposition`: evaluate a full repository, explicit `structure_ids`, or a server-side
   `selection_id` created by search, endpoint-filter, cluster-member, or selection-combination tools.
+- `export_selection_table`: write a TSV artifact for a selection, optionally joined to PRISM
+  endpoint long rows and decomposition fragment columns from an `evaluation_id`.
 - `get_decomposition_evaluation`: summary and optional molecule-level result list.
 - `get_decomposition_result`: full tree for one molecule.
 - `get_decomposition_failures`: non-successful molecules grouped by status.
@@ -264,6 +266,21 @@ get_decomposition_fragment_histogram({
 
 This returns rows such as `fragmentSmiles`, `support`, `exampleStructureIds`, and an optional
 `endpoint` object containing count, median, quartiles, threshold hit count, and hit rate.
+
+Example selection export for Python/DuckDB:
+
+```json
+export_selection_table({
+  "selection_id": "potent_alcohol_hits",
+  "dataset_id": "project1",
+  "endpoint_ids": ["primary_pIC50"],
+  "decomposition_evaluation_id": "eval_alcohol_hits",
+  "output_name": "exports/potent_alcohol_hits.tsv"
+})
+```
+
+The TSV contains structure identifiers, optional long-format endpoint values, and wide fragment
+columns such as `decomp_root_tail_cap_fragment_smiles` for terminal decomposition paths.
 
 ## Current limitations
 

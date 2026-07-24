@@ -185,6 +185,48 @@ public final class DecompositionAiService {
                 rows);
     }
 
+    public synchronized DecompositionExportView exportView(String evaluationId) {
+        StoredEvaluation evaluation = evaluation(evaluationId);
+        List<String> terminalPaths = evaluation.results().stream()
+                .flatMap(entry -> entry.result().terminalNodes().stream())
+                .filter(node -> node.label() != null)
+                .map(DecompositionNode::path)
+                .distinct()
+                .sorted()
+                .toList();
+        Map<String, DecompositionExportMolecule> molecules = new LinkedHashMap<>();
+        for (ResultEntry entry : evaluation.results()) {
+            DecompositionResult result = entry.result();
+            Map<String, DecompositionExportFragment> fragments = new LinkedHashMap<>();
+            for (DecompositionNode node : result.terminalNodes()) {
+                if (node.label() == null) {
+                    continue;
+                }
+                FragmentIdentity identity = fragmentIdentity(entry.structure().snapshot().moleculeView(), node);
+                fragments.put(node.path(), new DecompositionExportFragment(
+                        node.path(),
+                        node.label(),
+                        fragmentId(identity.signature()),
+                        identity.smiles()
+                ));
+            }
+            molecules.put(entry.structure().record().structureId(), new DecompositionExportMolecule(
+                    entry.structure().record().structureId(),
+                    statusText(result),
+                    result.root() == null ? null : result.root().appliedRuleId(),
+                    result.terminalNodes().stream().filter(node -> node.label() != null).map(DecompositionNode::path).sorted().toList(),
+                    fragments
+            ));
+        }
+        return new DecompositionExportView(
+                evaluation.evaluationId(),
+                evaluation.configId(),
+                evaluation.repositoryId(),
+                terminalPaths,
+                molecules
+        );
+    }
+
     private Map<String, MutableFragmentSummary> fragmentSummaries(StoredEvaluation evaluation) {
         Map<String, MutableFragmentSummary> byPath = new LinkedHashMap<>();
         for (ResultEntry entry : evaluation.results()) {
@@ -664,6 +706,29 @@ public final class DecompositionAiService {
             int distinctFragmentCount,
             int singletonCount,
             List<FragmentExample> examples
+    ) {}
+
+    public record DecompositionExportView(
+            String evaluationId,
+            String configId,
+            String repositoryId,
+            List<String> terminalPaths,
+            Map<String, DecompositionExportMolecule> molecules
+    ) {}
+
+    public record DecompositionExportMolecule(
+            String structureId,
+            String status,
+            String rootRule,
+            List<String> terminalPaths,
+            Map<String, DecompositionExportFragment> fragments
+    ) {}
+
+    public record DecompositionExportFragment(
+            String path,
+            String label,
+            String fragmentId,
+            String fragmentSmiles
     ) {}
 
     private record FragmentIdentity(String signature, String smiles) {}

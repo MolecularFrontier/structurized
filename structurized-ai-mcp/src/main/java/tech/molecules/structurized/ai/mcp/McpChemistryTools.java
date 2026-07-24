@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import tech.molecules.structurized.ai.clustering.SimilarityClusteringAiService;
 import tech.molecules.structurized.ai.decomposition.DecompositionAiService;
+import tech.molecules.structurized.ai.prism.PrismEndpointSummary;
 import tech.molecules.structurized.ai.prism.PrismEndpointValue;
 import tech.molecules.structurized.ai.selection.SelectionAiService;
 import tech.molecules.structurized.ai.selection.SelectionAiService.SelectionMember;
@@ -34,11 +35,15 @@ import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 import tech.molecules.structurized.ai.search.OclStructureSearchService;
 import tech.molecules.structurized.ai.search.StructureSearchService;
 import tech.molecules.structurized.clustering.SimilarityCluster;
+import tech.molecules.structurized.prism.result.EndpointResult;
 import tech.molecules.structurized.prism.result.NumericResult;
 import tech.molecules.structurized.prism.result.NumericState;
 import tech.molecules.structurized.decomposition.DecompositionConfig;
 
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -252,16 +257,31 @@ final class McpChemistryTools {
                         requiredString(args, "dataset_id"),
                         stringList(args, "subject_ids"),
                         stringList(args, "endpoint_ids")));
-        add(result, "create_endpoint_selection", "Creates a server-side selection from numeric Prism endpoint mean filters, optionally scoped to an existing selection; use this before combining chemotype and potency/property subsets.", schema(
-                required("dataset_id", "endpoint_id", "operator", "value"),
+        add(result, "create_endpoint_selection", "Creates a server-side selection from Prism endpoint mean and/or endpoint measurement-date filters, optionally scoped to an existing selection.", schema(
+                required("dataset_id", "endpoint_id"),
                 prop("dataset_id", "string", "Loaded PRISM dataset ID."),
                 prop("repository_id", "string", "Repository ID to scan. Required unless base_selection_id is provided."),
                 prop("base_selection_id", "string", "Optional existing selection to filter instead of scanning a repository."),
-                prop("endpoint_id", "string", "Numeric Prism endpoint ID."),
-                prop("operator", "string", "gt, gte, lt, lte, or eq."),
-                prop("value", "number", "Numeric threshold compared against endpoint mean."),
+                prop("endpoint_id", "string", "Prism endpoint ID."),
+                prop("operator", "string", "Optional numeric mean operator: gt, gte, lt, lte, or eq."),
+                prop("value", "number", "Optional numeric threshold compared against endpoint mean."),
+                prop("measurement_date_field", "string", "first or last measurement date. Defaults to last."),
+                prop("measured_after", "string", "Inclusive measurement date lower bound, YYYY-MM-DD or ISO instant."),
+                prop("measured_before", "string", "Inclusive measurement date upper bound, YYYY-MM-DD or ISO instant."),
+                prop("require_measured_date", "boolean", "Whether missing dates are excluded when date bounds are supplied. Defaults to true."),
                 prop("selection_id", "string", "Optional output selection ID.")),
                 this::createEndpointSelection);
+        add(result, "create_subject_measurement_date_selection", "Creates a server-side selection from subject-level first/last measurement dates aggregated across all or selected Prism endpoints.", schema(
+                required("dataset_id"),
+                prop("dataset_id", "string", "Loaded PRISM dataset ID."),
+                prop("repository_id", "string", "Repository ID to scan. Required unless base_selection_id is provided."),
+                prop("base_selection_id", "string", "Optional existing selection to filter instead of scanning a repository."),
+                arrayProp("endpoint_ids", "string", "Optional Prism endpoint IDs to aggregate. Defaults to all endpoints."),
+                prop("subject_date_field", "string", "first or last subject aggregate measurement date. Defaults to last."),
+                prop("measured_after", "string", "Inclusive aggregate date lower bound, YYYY-MM-DD or ISO instant."),
+                prop("measured_before", "string", "Inclusive aggregate date upper bound, YYYY-MM-DD or ISO instant."),
+                prop("selection_id", "string", "Optional output selection ID.")),
+                this::createSubjectMeasurementDateSelection);
         add(result, "materialize_prism_subject_set", "Materializes a PRISM subject set into a normal AI chemistry repository.", schema(
                 required("dataset_id"),
                 prop("dataset_id", "string", "Loaded PRISM dataset ID."),
@@ -356,6 +376,19 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 this::summarizeSelectionByEndpoint);
+        add(result, "export_selection_table", "Writes a TSV artifact for a server-side selection, with optional PRISM endpoint long rows and decomposition fragment columns for Python/DuckDB analysis.", schema(
+                required("selection_id"),
+                prop("selection_id", "string", "Stored selection ID to export."),
+                prop("dataset_id", "string", "Loaded Prism dataset ID. Required when endpoint_ids is provided."),
+                arrayProp("endpoint_ids", "string", "Optional Prism endpoint IDs to export in long format."),
+                prop("decomposition_evaluation_id", "string", "Optional decomposition evaluation whose terminal fragments become wide columns."),
+                prop("include_smiles", "boolean", "Whether to include canonical_smiles. Defaults to true."),
+                prop("include_fields", "boolean", "Whether to include selection member fields as field_* columns. Defaults to false."),
+                prop("include_subject_measurement_dates", "boolean", "Whether to add subject_first_measurement, subject_last_measurement, and subject_measurement_endpoint_count columns aggregated across all Prism endpoints. Requires dataset_id."),
+                prop("output_name", "string", "Optional relative TSV artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only tsv is supported for this tool.")),
+                this::exportSelectionTable);
         add(result, "summarize_clusters_by_endpoint", "Summarizes one numeric Prism endpoint for paged non-singleton clusters without returning member IDs. Defaults to include_singletons:false, offset:0, limit:50; use output_target:file for the full filtered table.", schema(
                 required("clustering_id", "dataset_id", "endpoint_id"),
                 prop("clustering_id", "string", "Stored clustering ID."),
@@ -497,20 +530,20 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint or evaluate_decomposition(selection_id); create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
                     # Payload Hygiene
                     search_substructure defaults to output_mode:count. Request output_mode:ids for compact rows and output_mode:full only when atom mappings are needed.
                     get_clustering and get_cluster are summaries; get_cluster_members and get_selection_members are paged drill-down tools.
-                    Prefer create_selection:true plus summarize_selection_by_endpoint when analyzing endpoint distributions for search hits or cluster members. Use create_endpoint_selection for numeric potency/property filters without fetching value rows. Use combine_selections for union/merge, intersect, and subtract without copying IDs into context. evaluate_decomposition also accepts selection_id, avoiding raw ID lists for scoped decomposition.
+                    Prefer create_selection:true plus summarize_selection_by_endpoint when analyzing endpoint distributions for search hits or cluster members. Use create_endpoint_selection for numeric potency/property and endpoint measurement-date filters without fetching value rows. Use create_subject_measurement_date_selection to find subjects whose first or last measured endpoint date is recent. Use combine_selections for union/merge, intersect, and subtract without copying IDs into context. evaluate_decomposition accepts selection_id, and export_selection_table writes TSV artifacts for Python/DuckDB without inline rows.
                     """;
             case "prism_workflow" -> """
                     # Prism Workflow
                     Open a TSV bundle with open_prism_dataset, inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
                     Use repository IDs returned by materialize_prism_subject_set for structure search, clustering, and decomposition evaluation.
-                    Endpoint summaries and create_endpoint_selection use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property subsets with operators gt/gte/lt/lte/eq and can scan a repository or filter an existing selection.
+                    Endpoint summaries, create_endpoint_selection, create_subject_measurement_date_selection, and export_selection_table use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property/date subsets with operators gt/gte/lt/lte/eq and optional first/last measurement date bounds. create_subject_measurement_date_selection aggregates first/last measurement dates across all or selected endpoints and is the preferred way to identify likely newest compounds. export_selection_table writes long endpoint rows with first_measurement/last_measurement and optional subject aggregate measurement date columns.
                     """;
             case "clustering_workflow" -> """
                     # Clustering Workflow
@@ -531,7 +564,7 @@ final class McpChemistryTools {
                     """;
             case "artifact_output" -> """
                     # Artifact Output
-                    Large-output tools accept output_target:response or output_target:file. File mode writes JSON under a server-managed artifact directory and returns an artifact receipt instead of the full payload.
+                    Large-output tools accept output_target:response or output_target:file. File mode writes JSON under a server-managed artifact directory and returns an artifact receipt instead of the full payload. export_selection_table always writes a TSV artifact and returns a compact receipt/schema.
                     output_name is optional and must be a safe relative path such as series_A/matches.json. Absolute paths, . and .. segments, and symlink traversal are rejected.
                     Existing caller-named files are auto-suffixed unless overwrite:true is provided. Use list_artifacts and get_artifact_info to recover paths.
                     """;
@@ -619,58 +652,127 @@ final class McpChemistryTools {
     private SelectionAiService.SelectionView createEndpointSelection(ObjectNode args) {
         String datasetId = requiredString(args, "dataset_id");
         String endpointId = requiredString(args, "endpoint_id");
-        String operator = normalizeEndpointFilterOperator(requiredString(args, "operator"));
-        double threshold = requiredDouble(args, "value");
-        String baseSelectionId = optionalString(args, "base_selection_id", null);
-        String repositoryId = optionalString(args, "repository_id", null);
-
-        List<StructureRecord> candidates;
-        String repoId;
-        if (baseSelectionId != null && !baseSelectionId.isBlank()) {
-            SelectionAiService.StoredSelectionData base = selections.selectionData(baseSelectionId);
-            repoId = base.summary().repositoryId();
-            if (repositoryId != null && !repositoryId.isBlank() && !repositoryId.trim().equals(repoId)) {
-                throw new ChemOperationException("selection_repository_mismatch", "base_selection_id " + baseSelectionId + " belongs to repository " + repoId + ", not " + repositoryId + ".");
-            }
-            candidates = base.members().stream()
-                    .map(member -> repositories.getStructure(new StructureRef(repoId, member.structureId())).record())
-                    .toList();
-        } else {
-            if (repositoryId == null || repositoryId.isBlank()) {
-                throw new ChemOperationException("invalid_endpoint_selection_scope", "repository_id is required unless base_selection_id is provided.");
-            }
-            repoId = repositoryId.trim();
-            candidates = allRepositoryRecords(repoId);
+        String operatorArgument = optionalString(args, "operator", null);
+        Double threshold = optionalDouble(args, "value", null);
+        MeasurementDateFilter dateFilter = measurementDateFilter(args, "measurement_date_field");
+        boolean hasNumericFilter = operatorArgument != null || threshold != null;
+        if (hasNumericFilter && (operatorArgument == null || threshold == null)) {
+            throw new ChemOperationException("invalid_endpoint_filter", "operator and value must be supplied together for numeric endpoint filtering.");
         }
+        if (!hasNumericFilter && !dateFilter.hasBounds()) {
+            throw new ChemOperationException("invalid_endpoint_filter", "create_endpoint_selection requires either operator/value or measured_after/measured_before.");
+        }
+        String operator = hasNumericFilter ? normalizeEndpointFilterOperator(operatorArgument) : null;
+        StructureScope scope = structureScope(args);
 
-        List<String> subjectIds = subjectIdsFromRecords(candidates);
-        Map<String, Double> numericMeansBySubject = new LinkedHashMap<>();
+        List<String> subjectIds = subjectIdsFromRecords(scope.candidates());
+        Map<String, PrismEndpointValue> valuesBySubject = new LinkedHashMap<>();
         if (!subjectIds.isEmpty()) {
             for (PrismEndpointValue value : prism.getEndpointValues(datasetId, subjectIds, List.of(endpointId))) {
-                if (value.result() instanceof NumericResult numeric
-                        && numeric.getState() == NumericState.VALUE
-                        && numeric.getMean() != null) {
-                    numericMeansBySubject.put(value.subjectId(), numeric.getMean());
-                }
+                valuesBySubject.put(value.subjectId(), value);
             }
         }
 
-        List<StructureRecord> matches = candidates.stream()
+        List<StructureRecord> matches = scope.candidates().stream()
                 .filter(record -> {
                     String subjectId = record.fields().get("prism.subject_id");
-                    Double mean = subjectId == null ? null : numericMeansBySubject.get(subjectId);
-                    return mean != null && endpointFilterMatches(mean, operator, threshold);
+                    PrismEndpointValue endpointValue = subjectId == null ? null : valuesBySubject.get(subjectId);
+                    if (endpointValue == null) {
+                        return false;
+                    }
+                    if (hasNumericFilter && !numericEndpointFilterMatches(endpointValue, operator, threshold)) {
+                        return false;
+                    }
+                    return dateFilter.matches(endpointValue.result());
                 })
                 .toList();
-        String sourceId = endpointId + " " + operator + " " + threshold
-                + (baseSelectionId == null || baseSelectionId.isBlank() ? "" : " in " + baseSelectionId);
+        String sourceId = endpointFilterSourceId(endpointId, operator, threshold, dateFilter, scope.baseSelectionId());
         SelectionAiService.SelectionRecord record = selections.createSelectionFromRecords(
                 optionalString(args, "selection_id", null),
-                repoId,
+                scope.repositoryId(),
                 "endpoint_filter",
                 sourceId,
                 matches);
         return selections.getSelection(record.selectionId());
+    }
+
+    private SelectionAiService.SelectionView createSubjectMeasurementDateSelection(ObjectNode args) {
+        String datasetId = requiredString(args, "dataset_id");
+        List<String> endpointIds = optionalStringList(args, "endpoint_ids");
+        if (endpointIds == null || endpointIds.isEmpty()) {
+            endpointIds = prism.listEndpoints(datasetId).stream()
+                    .map(PrismEndpointSummary::endpointId)
+                    .toList();
+        }
+        if (endpointIds.isEmpty()) {
+            throw new ChemOperationException("invalid_subject_measurement_date_selection", "No Prism endpoints are available for subject measurement date aggregation.");
+        }
+        MeasurementDateFilter dateFilter = subjectMeasurementDateFilter(args);
+        if (!dateFilter.hasBounds()) {
+            throw new ChemOperationException("invalid_subject_measurement_date_selection", "create_subject_measurement_date_selection requires measured_after or measured_before.");
+        }
+        StructureScope scope = structureScope(args);
+        Map<String, SubjectMeasurementDates> subjectDates = subjectMeasurementDates(datasetId, subjectIdsFromRecords(scope.candidates()), endpointIds);
+        List<StructureRecord> matches = scope.candidates().stream()
+                .filter(record -> {
+                    String subjectId = record.fields().get("prism.subject_id");
+                    SubjectMeasurementDates dates = subjectId == null ? null : subjectDates.get(subjectId);
+                    return dateFilter.matches(dates);
+                })
+                .toList();
+        String sourceId = "subject " + dateFilter.sourceText()
+                + " across " + endpointIds.size() + " endpoint" + (endpointIds.size() == 1 ? "" : "s")
+                + (scope.baseSelectionId() == null ? "" : " in " + scope.baseSelectionId());
+        SelectionAiService.SelectionRecord record = selections.createSelectionFromRecords(
+                optionalString(args, "selection_id", null),
+                scope.repositoryId(),
+                "subject_measurement_date_filter",
+                sourceId,
+                matches);
+        return selections.getSelection(record.selectionId());
+    }
+
+    private StructureScope structureScope(ObjectNode args) {
+        String baseSelectionId = optionalString(args, "base_selection_id", null);
+        String repositoryId = optionalString(args, "repository_id", null);
+        if (baseSelectionId != null && !baseSelectionId.isBlank()) {
+            SelectionAiService.StoredSelectionData base = selections.selectionData(baseSelectionId);
+            String repoId = base.summary().repositoryId();
+            if (repositoryId != null && !repositoryId.isBlank() && !repositoryId.trim().equals(repoId)) {
+                throw new ChemOperationException("selection_repository_mismatch", "base_selection_id " + baseSelectionId + " belongs to repository " + repoId + ", not " + repositoryId + ".");
+            }
+            List<StructureRecord> candidates = base.members().stream()
+                    .map(member -> repositories.getStructure(new StructureRef(repoId, member.structureId())).record())
+                    .toList();
+            return new StructureScope(repoId, baseSelectionId, candidates);
+        }
+        if (repositoryId == null || repositoryId.isBlank()) {
+            throw new ChemOperationException("invalid_endpoint_selection_scope", "repository_id is required unless base_selection_id is provided.");
+        }
+        String repoId = repositoryId.trim();
+        return new StructureScope(repoId, null, allRepositoryRecords(repoId));
+    }
+
+    private static boolean numericEndpointFilterMatches(PrismEndpointValue value, String operator, double threshold) {
+        if (value.result() instanceof NumericResult numeric
+                && numeric.getState() == NumericState.VALUE
+                && numeric.getMean() != null) {
+            return endpointFilterMatches(numeric.getMean(), operator, threshold);
+        }
+        return false;
+    }
+
+    private static String endpointFilterSourceId(String endpointId, String operator, Double threshold, MeasurementDateFilter dateFilter, String baseSelectionId) {
+        List<String> parts = new ArrayList<>();
+        if (operator != null && threshold != null) {
+            parts.add(endpointId + " " + operator + " " + threshold);
+        } else {
+            parts.add(endpointId);
+        }
+        if (dateFilter.hasBounds()) {
+            parts.add(dateFilter.sourceText());
+        }
+        return String.join(" and ", parts) + (baseSelectionId == null || baseSelectionId.isBlank() ? "" : " in " + baseSelectionId);
     }
 
     private List<StructureRecord> allRepositoryRecords(String repositoryId) {
@@ -752,6 +854,380 @@ final class McpChemistryTools {
                 new SelectionMembersArtifactSummary(members.summary(), members.members().size()),
                 members.members().size()
         );
+    }
+
+    private Object exportSelectionTable(ObjectNode args) throws Exception {
+        String selectionId = requiredString(args, "selection_id");
+        String datasetId = optionalString(args, "dataset_id", null);
+        List<String> endpointIds = optionalStringList(args, "endpoint_ids");
+        if (endpointIds == null) {
+            endpointIds = List.of();
+        }
+        boolean includeSubjectMeasurementDates = optionalBoolean(args, "include_subject_measurement_dates", false);
+        if (!endpointIds.isEmpty() && (datasetId == null || datasetId.isBlank())) {
+            throw new ChemOperationException("invalid_arguments", "dataset_id is required when endpoint_ids is provided.");
+        }
+        if (includeSubjectMeasurementDates && (datasetId == null || datasetId.isBlank())) {
+            throw new ChemOperationException("invalid_arguments", "dataset_id is required when include_subject_measurement_dates is true.");
+        }
+        String format = optionalString(args, "format", "tsv").trim().toLowerCase();
+        if (!"tsv".equals(format)) {
+            throw new ChemOperationException("unsupported_artifact_format", "export_selection_table only supports format: tsv.");
+        }
+
+        SelectionAiService.StoredSelectionData selection = selections.selectionData(selectionId);
+        boolean includeSmiles = optionalBoolean(args, "include_smiles", true);
+        boolean includeFields = optionalBoolean(args, "include_fields", false);
+        String decompositionEvaluationId = optionalString(args, "decomposition_evaluation_id", null);
+        DecompositionAiService.DecompositionExportView decomposition = null;
+        if (decompositionEvaluationId != null && !decompositionEvaluationId.isBlank()) {
+            decomposition = decompositions.exportView(decompositionEvaluationId);
+            if (!selection.summary().repositoryId().equals(decomposition.repositoryId())) {
+                throw new ChemOperationException("selection_repository_mismatch", "decomposition_evaluation_id " + decompositionEvaluationId + " belongs to repository " + decomposition.repositoryId() + ", not " + selection.summary().repositoryId() + ".");
+            }
+        }
+
+        SelectionTableExport export = buildSelectionTableExport(selection, datasetId, endpointIds, decomposition, includeSmiles, includeFields, includeSubjectMeasurementDates);
+        McpArtifactService.ArtifactRecord artifact = artifacts.writeText(
+                "export_selection_table",
+                optionalString(args, "output_name", null),
+                optionalBoolean(args, "overwrite", false),
+                "tsv",
+                "text/tab-separated-values",
+                export.tsv(),
+                export.rowCount()
+        );
+        return new ExportSelectionTableResult(export.summary(), artifact);
+    }
+
+    private SelectionTableExport buildSelectionTableExport(
+            SelectionAiService.StoredSelectionData selection,
+            String datasetId,
+            List<String> endpointIds,
+            DecompositionAiService.DecompositionExportView decomposition,
+            boolean includeSmiles,
+            boolean includeFields,
+            boolean includeSubjectMeasurementDates
+    ) throws Exception {
+        List<SelectionMember> members = selection.members();
+        boolean includeEndpoints = endpointIds != null && !endpointIds.isEmpty();
+        List<String> exportSubjectIds = subjectIdsFromSelectionMembers(members);
+        Map<String, Map<String, PrismEndpointValue>> endpointValues = includeEndpoints
+                ? endpointValuesBySubjectAndEndpoint(datasetId, exportSubjectIds, endpointIds)
+                : Map.of();
+        Map<String, SubjectMeasurementDates> subjectMeasurementDates = includeSubjectMeasurementDates
+                ? subjectMeasurementDates(datasetId, exportSubjectIds, allEndpointIds(datasetId))
+                : Map.of();
+        List<String> fieldKeys = includeFields
+                ? members.stream()
+                        .flatMap(member -> member.fields().keySet().stream())
+                        .distinct()
+                        .sorted()
+                        .toList()
+                : List.of();
+        Map<String, String> fieldColumns = safeColumnNames(fieldKeys, "field_");
+        List<String> decompositionPaths = decomposition == null ? List.of() : decomposition.terminalPaths();
+        Map<String, String> decompositionColumnBases = safeColumnNames(decompositionPaths, "decomp_");
+
+        List<String> columns = new ArrayList<>();
+        columns.add("structure_id");
+        columns.add("repository_id");
+        columns.add("subject_id");
+        columns.add("label");
+        if (includeSmiles) {
+            columns.add("canonical_smiles");
+        }
+        for (String fieldKey : fieldKeys) {
+            columns.add(fieldColumns.get(fieldKey));
+        }
+        if (includeSubjectMeasurementDates) {
+            columns.add("subject_first_measurement");
+            columns.add("subject_last_measurement");
+            columns.add("subject_measurement_endpoint_count");
+        }
+        if (includeEndpoints) {
+            columns.addAll(List.of(
+                    "endpoint_id",
+                    "result_type",
+                    "numeric_state",
+                    "value",
+                    "lower",
+                    "upper",
+                    "n",
+                    "raw_value_ids",
+                    "first_measurement",
+                    "last_measurement",
+                    "details_json"
+            ));
+        }
+        if (decomposition != null) {
+            columns.add("decomposition_evaluation_id");
+            columns.add("decomposition_status");
+            columns.add("decomposition_root_rule");
+            columns.add("decomposition_terminal_paths");
+            for (String path : decompositionPaths) {
+                String base = decompositionColumnBases.get(path);
+                columns.add(base + "_label");
+                columns.add(base + "_fragment_id");
+                columns.add(base + "_fragment_smiles");
+            }
+        }
+
+        StringBuilder builder = new StringBuilder();
+        appendTsvRow(builder, columns);
+        int rowCount = 0;
+        for (SelectionMember member : members) {
+            if (includeEndpoints) {
+                String subjectId = member.fields().get("prism.subject_id");
+                Map<String, PrismEndpointValue> byEndpoint = subjectId == null ? Map.of() : endpointValues.getOrDefault(subjectId, Map.of());
+                for (String endpointId : endpointIds) {
+                    PrismEndpointValue value = byEndpoint.get(endpointId);
+                    if (value == null) {
+                        continue;
+                    }
+                    SubjectMeasurementDates dates = includeSubjectMeasurementDates ? subjectMeasurementDates.getOrDefault(subjectId, SubjectMeasurementDates.empty()) : null;
+                    appendTsvRow(builder, exportRow(selection.summary().repositoryId(), member, fieldKeys, includeSmiles, dates, value, decomposition, decompositionPaths));
+                    rowCount++;
+                }
+            } else {
+                String subjectId = member.fields().get("prism.subject_id");
+                SubjectMeasurementDates dates = includeSubjectMeasurementDates ? subjectMeasurementDates.getOrDefault(subjectId, SubjectMeasurementDates.empty()) : null;
+                appendTsvRow(builder, exportRow(selection.summary().repositoryId(), member, fieldKeys, includeSmiles, dates, null, decomposition, decompositionPaths));
+                rowCount++;
+            }
+        }
+        ExportSelectionTableSummary summary = new ExportSelectionTableSummary(
+                selection.summary(),
+                datasetId,
+                endpointIds == null ? List.of() : endpointIds,
+                decomposition == null ? null : decomposition.evaluationId(),
+                members.size(),
+                rowCount,
+                columns.size(),
+                columns
+        );
+        return new SelectionTableExport(summary, builder.toString(), rowCount);
+    }
+
+    private List<String> exportRow(
+            String repositoryId,
+            SelectionMember member,
+            List<String> fieldKeys,
+            boolean includeSmiles,
+            SubjectMeasurementDates subjectMeasurementDates,
+            PrismEndpointValue endpointValue,
+            DecompositionAiService.DecompositionExportView decomposition,
+            List<String> decompositionPaths
+    ) throws Exception {
+        List<String> row = new ArrayList<>();
+        row.add(member.structureId());
+        row.add(repositoryId);
+        row.add(member.fields().get("prism.subject_id"));
+        row.add(member.label());
+        if (includeSmiles) {
+            row.add(member.canonicalSmiles());
+        }
+        for (String fieldKey : fieldKeys) {
+            row.add(member.fields().get(fieldKey));
+        }
+        if (subjectMeasurementDates != null) {
+            row.add(subjectMeasurementDates.firstMeasurement());
+            row.add(subjectMeasurementDates.lastMeasurement());
+            row.add(String.valueOf(subjectMeasurementDates.endpointCount()));
+        }
+        if (endpointValue != null) {
+            appendEndpointColumns(row, endpointValue);
+        }
+        if (decomposition != null) {
+            DecompositionAiService.DecompositionExportMolecule molecule = decomposition.molecules().get(member.structureId());
+            row.add(decomposition.evaluationId());
+            row.add(molecule == null ? "" : molecule.status());
+            row.add(molecule == null ? "" : molecule.rootRule());
+            row.add(molecule == null ? "" : String.join("|", molecule.terminalPaths()));
+            for (String path : decompositionPaths) {
+                DecompositionAiService.DecompositionExportFragment fragment = molecule == null ? null : molecule.fragments().get(path);
+                row.add(fragment == null ? "" : fragment.label());
+                row.add(fragment == null ? "" : fragment.fragmentId());
+                row.add(fragment == null ? "" : fragment.fragmentSmiles());
+            }
+        }
+        return row;
+    }
+
+    private void appendEndpointColumns(List<String> row, PrismEndpointValue value) throws Exception {
+        EndpointResult result = value.result();
+        row.add(value.endpointId());
+        row.add(result == null || result.getType() == null ? "" : result.getType().name());
+        if (result instanceof NumericResult numeric) {
+            row.add(numeric.getState() == null ? "" : numeric.getState().name());
+            row.add(valueString(numeric.getMean()));
+            row.add(valueString(numeric.getLower()));
+            row.add(valueString(numeric.getUpper()));
+        } else {
+            row.add("");
+            row.add("");
+            row.add("");
+            row.add("");
+        }
+        row.add(result == null || result.getN() == null ? "" : result.getN().toString());
+        row.add(result == null || result.getRawValueIds() == null ? "" : String.join("|", result.getRawValueIds()));
+        row.add(result == null ? "" : result.getFirstMeasurement());
+        row.add(result == null ? "" : result.getLastMeasurement());
+        row.add(result == null || result.getDetails() == null || result.getDetails().isEmpty() ? "" : mapper.writeValueAsString(result.getDetails()));
+    }
+
+    private List<String> allEndpointIds(String datasetId) {
+        return prism.listEndpoints(datasetId).stream()
+                .map(PrismEndpointSummary::endpointId)
+                .toList();
+    }
+
+    private Map<String, SubjectMeasurementDates> subjectMeasurementDates(String datasetId, List<String> subjectIds, List<String> endpointIds) {
+        if (subjectIds.isEmpty() || endpointIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, SubjectMeasurementDateBuilder> builders = new LinkedHashMap<>();
+        for (PrismEndpointValue value : prism.getEndpointValues(datasetId, subjectIds, endpointIds)) {
+            EndpointResult result = value.result();
+            if (result == null) {
+                continue;
+            }
+            Instant first = parseOptionalMeasurementInstant(result.getFirstMeasurement());
+            Instant last = parseOptionalMeasurementInstant(result.getLastMeasurement());
+            if (first == null && last == null) {
+                continue;
+            }
+            builders.computeIfAbsent(value.subjectId(), ignored -> new SubjectMeasurementDateBuilder())
+                    .add(result.getFirstMeasurement(), first, result.getLastMeasurement(), last);
+        }
+        Map<String, SubjectMeasurementDates> aggregates = new LinkedHashMap<>();
+        for (Map.Entry<String, SubjectMeasurementDateBuilder> entry : builders.entrySet()) {
+            aggregates.put(entry.getKey(), entry.getValue().build());
+        }
+        return Map.copyOf(aggregates);
+    }
+
+    private static MeasurementDateFilter measurementDateFilter(ObjectNode args, String dateFieldArgumentName) {
+        String field = normalizeMeasurementDateField(optionalString(args, dateFieldArgumentName, "last"), dateFieldArgumentName);
+        String afterText = optionalString(args, "measured_after", null);
+        String beforeText = optionalString(args, "measured_before", null);
+        boolean requireMeasuredDate = optionalBoolean(args, "require_measured_date", afterText != null || beforeText != null);
+        return new MeasurementDateFilter(
+                field,
+                parseMeasurementDateBound(afterText, true),
+                parseMeasurementDateBound(beforeText, false),
+                afterText,
+                beforeText,
+                requireMeasuredDate);
+    }
+
+    private static MeasurementDateFilter subjectMeasurementDateFilter(ObjectNode args) {
+        String field = normalizeMeasurementDateField(optionalString(args, "subject_date_field", "last"), "subject_date_field");
+        String afterText = optionalString(args, "measured_after", null);
+        String beforeText = optionalString(args, "measured_before", null);
+        return new MeasurementDateFilter(
+                field,
+                parseMeasurementDateBound(afterText, true),
+                parseMeasurementDateBound(beforeText, false),
+                afterText,
+                beforeText,
+                true);
+    }
+
+    private static String normalizeMeasurementDateField(String value, String argumentName) {
+        String normalized = value == null || value.isBlank() ? "last" : value.trim().toLowerCase();
+        if (!"first".equals(normalized) && !"last".equals(normalized)) {
+            throw new ChemOperationException("invalid_measurement_date_filter", argumentName + " must be first or last.");
+        }
+        return normalized;
+    }
+
+    private static Instant parseMeasurementDateBound(String value, boolean lowerBound) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String trimmed = value.trim();
+        try {
+            if (trimmed.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                LocalDate date = LocalDate.parse(trimmed);
+                return lowerBound
+                        ? date.atStartOfDay(ZoneId.systemDefault()).toInstant()
+                        : date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().minusNanos(1);
+            }
+            return Instant.parse(trimmed);
+        }
+        catch (RuntimeException exception) {
+            throw new ChemOperationException("invalid_measurement_date_filter", "Measurement date filters must be YYYY-MM-DD or ISO instants: " + trimmed, exception);
+        }
+    }
+
+    private static Instant parseOptionalMeasurementInstant(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            if (value.trim().matches("\\d{4}-\\d{2}-\\d{2}")) {
+                return LocalDate.parse(value.trim()).atStartOfDay(ZoneId.systemDefault()).toInstant();
+            }
+            return Instant.parse(value.trim());
+        }
+        catch (RuntimeException exception) {
+            throw new ChemOperationException("invalid_measurement_date_filter", "Invalid measurement date in Prism endpoint value: " + value, exception);
+        }
+    }
+
+    private Map<String, Map<String, PrismEndpointValue>> endpointValuesBySubjectAndEndpoint(
+            String datasetId,
+            List<String> subjectIds,
+            List<String> endpointIds
+    ) {
+        if (subjectIds.isEmpty() || endpointIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Map<String, PrismEndpointValue>> result = new LinkedHashMap<>();
+        for (PrismEndpointValue value : prism.getEndpointValues(datasetId, subjectIds, endpointIds)) {
+            result.computeIfAbsent(value.subjectId(), ignored -> new LinkedHashMap<>())
+                    .put(value.endpointId(), value);
+        }
+        return result;
+    }
+
+    private static Map<String, String> safeColumnNames(List<String> rawNames, String prefix) {
+        Map<String, String> result = new LinkedHashMap<>();
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String rawName : rawNames) {
+            String safe = safeColumnName(prefix + rawName);
+            int count = counts.merge(safe, 1, Integer::sum);
+            result.put(rawName, count == 1 ? safe : safe + "_" + count);
+        }
+        return result;
+    }
+
+    private static String safeColumnName(String rawName) {
+        String safe = (rawName == null ? "" : rawName.trim().toLowerCase()).replaceAll("[^a-z0-9]+", "_");
+        safe = safe.replaceAll("^_+|_+$", "");
+        return safe.isBlank() ? "column" : safe;
+    }
+
+    private static void appendTsvRow(StringBuilder builder, List<String> values) {
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                builder.append('\t');
+            }
+            builder.append(tsvValue(values.get(i)));
+        }
+        builder.append('\n');
+    }
+
+    private static String tsvValue(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
+    }
+
+    private static String valueString(Double value) {
+        return value == null ? "" : value.toString();
     }
 
     private Object summarizeSelectionByEndpoint(ObjectNode args) {
@@ -1310,9 +1786,130 @@ final class McpChemistryTools {
 
     private record StructureInspectionText(StructureInspection inspection, String text) {}
 
+    private record StructureScope(String repositoryId, String baseSelectionId, List<StructureRecord> candidates) {}
+
+    private record SubjectMeasurementDates(
+            String firstMeasurement,
+            String lastMeasurement,
+            int endpointCount,
+            Instant firstInstant,
+            Instant lastInstant
+    ) {
+        static SubjectMeasurementDates empty() {
+            return new SubjectMeasurementDates("", "", 0, null, null);
+        }
+    }
+
+    private static final class SubjectMeasurementDateBuilder {
+        private String firstMeasurement;
+        private String lastMeasurement;
+        private Instant firstInstant;
+        private Instant lastInstant;
+        private int endpointCount;
+
+        private void add(String firstText, Instant first, String lastText, Instant last) {
+            endpointCount++;
+            if (first != null && (firstInstant == null || first.isBefore(firstInstant))) {
+                firstInstant = first;
+                firstMeasurement = firstText;
+            }
+            if (last != null && (lastInstant == null || last.isAfter(lastInstant))) {
+                lastInstant = last;
+                lastMeasurement = lastText;
+            }
+        }
+
+        private SubjectMeasurementDates build() {
+            return new SubjectMeasurementDates(
+                    firstMeasurement == null ? "" : firstMeasurement,
+                    lastMeasurement == null ? "" : lastMeasurement,
+                    endpointCount,
+                    firstInstant,
+                    lastInstant);
+        }
+    }
+
+    private record MeasurementDateFilter(
+            String field,
+            Instant measuredAfter,
+            Instant measuredBefore,
+            String measuredAfterText,
+            String measuredBeforeText,
+            boolean requireMeasuredDate
+    ) {
+        boolean hasBounds() {
+            return measuredAfter != null || measuredBefore != null;
+        }
+
+        boolean matches(EndpointResult result) {
+            if (!hasBounds()) {
+                return true;
+            }
+            Instant instant = selectedInstant(result);
+            if (instant == null) {
+                return !requireMeasuredDate;
+            }
+            return matchesInstant(instant);
+        }
+
+        boolean matches(SubjectMeasurementDates dates) {
+            if (!hasBounds()) {
+                return true;
+            }
+            Instant instant = dates == null ? null : ("first".equals(field) ? dates.firstInstant() : dates.lastInstant());
+            if (instant == null) {
+                return false;
+            }
+            return matchesInstant(instant);
+        }
+
+        String sourceText() {
+            List<String> parts = new ArrayList<>();
+            if (measuredAfterText != null && !measuredAfterText.isBlank()) {
+                parts.add(field + "_measurement >= " + measuredAfterText.trim());
+            }
+            if (measuredBeforeText != null && !measuredBeforeText.isBlank()) {
+                parts.add(field + "_measurement <= " + measuredBeforeText.trim());
+            }
+            return String.join(" and ", parts);
+        }
+
+        private boolean matchesInstant(Instant instant) {
+            return (measuredAfter == null || !instant.isBefore(measuredAfter))
+                    && (measuredBefore == null || !instant.isAfter(measuredBefore));
+        }
+
+        private Instant selectedInstant(EndpointResult result) {
+            if (result == null) {
+                return null;
+            }
+            return parseOptionalMeasurementInstant("first".equals(field) ? result.getFirstMeasurement() : result.getLastMeasurement());
+        }
+    }
+
+
     private record ToolGuide(String topic, String markdown) {}
 
     private record ArtifactOutputResult(Object summary, McpArtifactService.ArtifactRecord artifact) {}
+
+    private record ExportSelectionTableResult(ExportSelectionTableSummary summary, McpArtifactService.ArtifactRecord artifact) {}
+
+    private record ExportSelectionTableSummary(
+            SelectionAiService.SelectionRecord selection,
+            String datasetId,
+            List<String> endpointIds,
+            String decompositionEvaluationId,
+            int selectedStructureCount,
+            int rowCount,
+            int columnCount,
+            List<String> columns
+    ) {}
+
+    private record SelectionTableExport(
+            ExportSelectionTableSummary summary,
+            String tsv,
+            int rowCount
+    ) {}
 
     private record SubstructureSearchArtifactSummary(
             Object query,

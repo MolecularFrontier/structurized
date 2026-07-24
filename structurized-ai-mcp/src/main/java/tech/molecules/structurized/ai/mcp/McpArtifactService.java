@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -65,6 +66,41 @@ final class McpArtifactService {
         }
     }
 
+    synchronized ArtifactRecord writeText(
+            String sourceTool,
+            String outputName,
+            boolean overwrite,
+            String format,
+            String contentType,
+            String payload,
+            Integer rowCount
+    ) {
+        String normalizedFormat = normalizeTextFormat(format);
+        String artifactId = generatedArtifactId();
+        Path relative = relativePath(sourceTool, outputName, normalizedFormat);
+        Path target = resolveTarget(relative, overwrite);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, payload == null ? "" : payload, StandardCharsets.UTF_8);
+            long byteSize = Files.size(target);
+            ArtifactRecord record = new ArtifactRecord(
+                    artifactId,
+                    target.toAbsolutePath().normalize().toString(),
+                    baseDirectory.relativize(target).toString(),
+                    normalizedFormat,
+                    contentType == null || contentType.isBlank() ? "text/plain" : contentType,
+                    byteSize,
+                    Instant.now().toString(),
+                    sourceTool,
+                    rowCount
+            );
+            artifacts.put(artifactId, record);
+            return record;
+        } catch (IOException e) {
+            throw new ChemOperationException("artifact_write_error", "Could not write MCP artifact: " + e.getMessage(), e);
+        }
+    }
+
     synchronized List<ArtifactRecord> listArtifacts() {
         return List.copyOf(artifacts.values());
     }
@@ -85,8 +121,8 @@ final class McpArtifactService {
         if (outputName == null || outputName.isBlank()) {
             return Path.of(defaultFileName(sourceTool, format));
         }
-        if (!"json".equals(format)) {
-            throw new ChemOperationException("unsupported_artifact_format", "Only json artifact output is supported.");
+        if (!"json".equals(format) && !"tsv".equals(format) && !"txt".equals(format) && !"csv".equals(format)) {
+            throw new ChemOperationException("unsupported_artifact_format", "Artifact format must be json, tsv, csv, or txt.");
         }
         Path relative = Path.of(outputName.trim());
         validateRelativePath(relative);
@@ -179,6 +215,14 @@ final class McpArtifactService {
             throw new ChemOperationException("invalid_arguments", "Missing required argument: artifact_id");
         }
         return artifactId.trim();
+    }
+
+    private static String normalizeTextFormat(String format) {
+        String normalized = format == null || format.isBlank() ? "txt" : format.trim().toLowerCase();
+        if (!"tsv".equals(normalized) && !"txt".equals(normalized) && !"csv".equals(normalized)) {
+            throw new ChemOperationException("unsupported_artifact_format", "Text artifact format must be tsv, csv, or txt.");
+        }
+        return normalized;
     }
 
     private static Path defaultBaseDirectory() {
