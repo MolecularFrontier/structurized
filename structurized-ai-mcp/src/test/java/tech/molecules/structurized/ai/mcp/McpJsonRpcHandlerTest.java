@@ -49,7 +49,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(44, tools.size());
+        assertEquals(45, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -63,6 +63,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "evaluate_decomposition"));
         assertTrue(hasTool(tools, "get_decomposition_result"));
         assertTrue(hasTool(tools, "get_decomposition_fragment_summary"));
+        assertTrue(hasTool(tools, "get_decomposition_fragment_histogram"));
         assertTrue(hasTool(tools, "cluster_structures"));
         assertTrue(hasTool(tools, "list_clusterings"));
         assertTrue(hasTool(tools, "get_clustering"));
@@ -300,6 +301,57 @@ class McpJsonRpcHandlerTest {
         assertTrue(Files.exists(fragmentArtifact));
         assertTrue(fragmentFile.at("/result/structuredContent/rows").isMissingNode());
         assertTrue(mapper.readTree(fragmentArtifact.toFile()).at("/rows/0/examples/0/atomIds").isArray());
+    }
+
+    @Test
+    void fragmentHistogramSupportsEndpointStatsPagingAndFileOutput() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = prismDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(2, "register_structure", """
+                {"smiles":"CCCO","structure_id":"butanol_a","fields":{"prism.subject_id":"CMP-001"}}
+                """));
+        call(handler, request(3, "register_structure", """
+                {"smiles":"CCCO","structure_id":"butanol_b","fields":{"prism.subject_id":"CMP-002"}}
+                """));
+        call(handler, request(4, "register_structure", """
+                {"smiles":"NCCO","structure_id":"aminoethanol","fields":{"prism.subject_id":"CMP-002"}}
+                """));
+        call(handler, request(5, "create_decomposition_config", """
+                {
+                  "config_id":"hist_split",
+                  "config":{
+                    "version":"series-decomposition-v1",
+                    "rules":[{"id":"split_root","labelToSplit":null,"smarts":"CCO","atomLabels":{"0":"alkyl","1":"linker","2":"head"}}]
+                  }
+                }
+                """));
+        call(handler, request(6, "evaluate_decomposition", """
+                {"evaluation_id":"hist_eval","config_id":"hist_split","repository_id":"session"}
+                """));
+
+        JsonNode histogram = call(handler, request(7, "get_decomposition_fragment_histogram", """
+                {"evaluation_id":"hist_eval","label":"alkyl","dataset_id":"demo","endpoint_id":"pIC50","threshold":7.0,"limit":1,"example_limit":2}
+                """));
+        assertEquals("root.alkyl", histogram.at("/result/structuredContent/path").asText());
+        assertEquals(2, histogram.at("/result/structuredContent/totalFragments").asInt());
+        assertEquals(1, histogram.at("/result/structuredContent/returnedFragments").asInt());
+        assertEquals(2, histogram.at("/result/structuredContent/rows/0/support").asInt());
+        assertEquals(2, histogram.at("/result/structuredContent/rows/0/exampleStructureIds").size());
+        assertTrue(histogram.at("/result/structuredContent/rows/0/structureIds").isMissingNode());
+        assertEquals(2, histogram.at("/result/structuredContent/rows/0/endpoint/measuredCount").asInt());
+        assertEquals(6.65, histogram.at("/result/structuredContent/rows/0/endpoint/median").asDouble(), 0.0001);
+        assertEquals(1, histogram.at("/result/structuredContent/rows/0/endpoint/thresholdHitCount").asInt());
+
+        JsonNode fileHistogram = call(handler, request(8, "get_decomposition_fragment_histogram", """
+                {"evaluation_id":"hist_eval","path":"root.alkyl","dataset_id":"demo","endpoint_id":"pIC50","limit":1,"output_target":"file","output_name":"decomp/alkyl-histogram.json"}
+                """));
+        assertEquals(2, fileHistogram.at("/result/structuredContent/summary/totalFragments").asInt());
+        assertEquals(1, fileHistogram.at("/result/structuredContent/summary/returnedFragments").asInt());
+        assertTrue(fileHistogram.at("/result/structuredContent/rows").isMissingNode());
+        Path artifact = Path.of(fileHistogram.at("/result/structuredContent/artifact/path").asText());
+        assertEquals(2, mapper.readTree(artifact.toFile()).at("/rows").size());
     }
 
     @Test

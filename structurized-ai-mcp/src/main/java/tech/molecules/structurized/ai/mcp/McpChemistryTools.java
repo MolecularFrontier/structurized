@@ -424,6 +424,23 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 this::decompositionFragmentSummary);
+        add(result, "get_decomposition_fragment_histogram", "Returns a ranked distinct-fragment histogram for one decomposition path or label, with optional Prism endpoint statistics. Defaults to offset:0, limit:50, example_limit:3; use output_target:file for the full compact table.", schema(
+                required("evaluation_id"),
+                prop("evaluation_id", "string", "Stored decomposition evaluation ID."),
+                prop("path", "string", "Terminal decomposition path such as root.cap."),
+                prop("label", "string", "Terminal decomposition label; ambiguous labels require path instead."),
+                prop("offset", "integer", "Zero-based histogram row offset."),
+                prop("limit", "integer", "Maximum histogram rows returned in response mode."),
+                prop("example_limit", "integer", "Maximum example structure IDs retained per fragment row."),
+                prop("dataset_id", "string", "Optional loaded Prism dataset ID for endpoint stats."),
+                prop("endpoint_id", "string", "Optional numeric Prism endpoint ID for endpoint stats."),
+                prop("threshold", "number", "Optional activity threshold."),
+                prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                this::decompositionFragmentHistogram);
         return result;
     }
 
@@ -435,7 +452,7 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) -> summarize_selection_by_endpoint; create_decomposition_config -> evaluate_decomposition -> get_decomposition_failures.
+                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) -> summarize_selection_by_endpoint; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
@@ -464,6 +481,7 @@ final class McpChemistryTools {
                     Bonds between differently labeled adjacent matched atoms are cut. After cuts, every resulting component must contain exactly one label type; unlabeled atoms are absorbed into their connected labeled component.
                     Amide example: for [C:1](=O)[NX3:2], label the carbon and nitrogen query atoms, e.g. {"0":"acyl","2":"amine"}; leave oxygen unlabeled. The common {"1":"acyl","2":"amine"} labels oxygen and nitrogen and leaves carbon unlabeled, producing one component with multiple label types.
                     validate_decomposition_config checks schema, SMARTS compilation, label index range, and query-graph label partitioning. evaluate_decomposition is still required for molecule-specific matches, ambiguity, and coverage.
+                    After evaluation, use get_decomposition_fragment_summary to list terminal paths, then get_decomposition_fragment_histogram for ranked distinct fragments at one path or label, optionally joined to Prism endpoint stats.
                     """;
             case "artifact_output" -> """
                     # Artifact Output
@@ -781,6 +799,94 @@ final class McpChemistryTools {
         return new CompactDecompositionFragmentSummary(summary.evaluationId(), summary.totalRows(), rows);
     }
 
+    private Object decompositionFragmentHistogram(ObjectNode args) {
+        String evaluationId = requiredString(args, "evaluation_id");
+        String path = optionalString(args, "path", null);
+        String label = optionalString(args, "label", null);
+        int offset = Math.max(0, optionalInt(args, "offset", 0));
+        int limit = Math.min(1000, Math.max(1, optionalInt(args, "limit", 50)));
+        int exampleLimit = Math.max(1, optionalInt(args, "example_limit", 3));
+        String datasetId = optionalString(args, "dataset_id", null);
+        String endpointId = optionalString(args, "endpoint_id", null);
+        if ((datasetId == null || datasetId.isBlank()) != (endpointId == null || endpointId.isBlank())) {
+            throw new ChemOperationException("invalid_arguments", "dataset_id and endpoint_id must be provided together for fragment endpoint stats.");
+        }
+        Double threshold = optionalDouble(args, "threshold", null);
+        String thresholdDirection = optionalString(args, "threshold_direction", "gte");
+
+        DecompositionAiService.DecompositionFragmentHistogramView responseView = decompositions.getFragmentHistogram(
+                evaluationId,
+                path,
+                label,
+                offset,
+                limit,
+                exampleLimit);
+        FragmentHistogramToolResult response = fragmentHistogramToolResult(responseView, datasetId, endpointId, threshold, thresholdDirection);
+        String outputTarget = normalizeOutputTarget(optionalString(args, "output_target", "response"));
+        if ("response".equals(outputTarget)) {
+            return response;
+        }
+
+        DecompositionAiService.DecompositionFragmentHistogramView fullView = decompositions.getFragmentHistogram(
+                evaluationId,
+                path,
+                label,
+                0,
+                Integer.MAX_VALUE,
+                exampleLimit);
+        FragmentHistogramToolResult full = fragmentHistogramToolResult(fullView, datasetId, endpointId, threshold, thresholdDirection);
+        FragmentHistogramArtifactSummary summary = new FragmentHistogramArtifactSummary(
+                full.evaluationId(),
+                full.repositoryId(),
+                full.path(),
+                full.label(),
+                endpointId,
+                full.totalFragments(),
+                response.returnedFragments(),
+                response.offset(),
+                response.limit());
+        McpArtifactService.ArtifactRecord artifact = writeJsonArtifact(args, "get_decomposition_fragment_histogram", full, full.totalFragments());
+        return new ArtifactOutputResult(summary, artifact);
+    }
+
+    private FragmentHistogramToolResult fragmentHistogramToolResult(
+            DecompositionAiService.DecompositionFragmentHistogramView view,
+            String datasetId,
+            String endpointId,
+            Double threshold,
+            String thresholdDirection
+    ) {
+        List<FragmentHistogramToolRow> rows = view.rows().stream()
+                .map(row -> {
+                    EndpointSummaryRow endpoint = endpointId == null || endpointId.isBlank()
+                            ? null
+                            : endpointStats(
+                                    datasetId,
+                                    endpointId,
+                                    subjectIdsFromStructureIds(view.repositoryId(), row.structureIds()),
+                                    row.structureIds().size(),
+                                    threshold,
+                                    thresholdDirection);
+                    return new FragmentHistogramToolRow(
+                            row.fragmentId(),
+                            row.fragmentSmiles(),
+                            row.support(),
+                            row.exampleStructureIds(),
+                            endpoint);
+                })
+                .toList();
+        return new FragmentHistogramToolResult(
+                view.evaluationId(),
+                view.repositoryId(),
+                view.path(),
+                view.label(),
+                view.totalFragments(),
+                view.returnedFragments(),
+                view.offset(),
+                view.limit(),
+                rows);
+    }
+
     private Object maybeFile(ObjectNode args, String sourceTool, Object responsePayload, Object summary, Integer rowCount) {
         return maybeFile(args, sourceTool, responsePayload, summary, rowCount, responsePayload);
     }
@@ -827,6 +933,14 @@ final class McpChemistryTools {
     private static List<String> subjectIdsFromRecords(List<StructureRecord> records) {
         return records.stream()
                 .map(record -> record.fields().get("prism.subject_id"))
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private List<String> subjectIdsFromStructureIds(String repositoryId, List<String> structureIds) {
+        return structureIds.stream()
+                .map(structureId -> repositories.getStructure(new StructureRef(repositoryId, structureId)).record().fields().get("prism.subject_id"))
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .toList();
@@ -1098,6 +1212,18 @@ final class McpChemistryTools {
             boolean detailed
     ) {}
 
+    private record FragmentHistogramArtifactSummary(
+            String evaluationId,
+            String repositoryId,
+            String path,
+            String label,
+            String endpointId,
+            int totalFragments,
+            int returnedFragments,
+            int offset,
+            int limit
+    ) {}
+
     private record SubstructureSearchToolResult(
             Object query,
             Object scope,
@@ -1194,6 +1320,26 @@ final class McpChemistryTools {
     ) {}
 
     private record CompactFragmentExample(String structureId, String fragmentSmiles) {}
+
+    private record FragmentHistogramToolResult(
+            String evaluationId,
+            String repositoryId,
+            String path,
+            String label,
+            int totalFragments,
+            int returnedFragments,
+            int offset,
+            int limit,
+            List<FragmentHistogramToolRow> rows
+    ) {}
+
+    private record FragmentHistogramToolRow(
+            String fragmentId,
+            String fragmentSmiles,
+            int support,
+            List<String> exampleStructureIds,
+            EndpointSummaryRow endpoint
+    ) {}
 
     private record Required(List<String> names) {}
 

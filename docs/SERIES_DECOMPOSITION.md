@@ -202,6 +202,28 @@ Useful follow-up tools:
   returns compact rows by default: counts plus representative fragment SMILES. Set
   `include_details:true` only when the caller needs fragment signatures, atom IDs, and atom
   indices. Set `output_target:"file"` to write compact or detailed rows to a managed artifact.
+- `get_decomposition_fragment_histogram`: ranked distinct-fragment vocabulary for one terminal
+  `path` or unambiguous `label`. It returns support counts, representative fragment SMILES, and
+  example structure IDs. Add `dataset_id` and `endpoint_id` to attach PRISM endpoint summaries per
+  fragment, for example median potency and threshold hit rate. Response mode is paged; set
+  `output_target:"file"` for the full compact histogram table.
+
+Example R-group SAR histogram:
+
+```json
+get_decomposition_fragment_histogram({
+  "evaluation_id": "eval1",
+  "path": "root.tail.cap",
+  "dataset_id": "mc2r",
+  "endpoint_id": "hMC2R_pIC50",
+  "threshold": 7.0,
+  "threshold_direction": "gte",
+  "limit": 25
+})
+```
+
+This returns rows such as `fragmentSmiles`, `support`, `exampleStructureIds`, and an optional
+`endpoint` object containing count, median, quartiles, threshold hit count, and hit rate.
 
 ## Current limitations
 

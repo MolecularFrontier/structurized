@@ -24,6 +24,9 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -148,6 +151,41 @@ public final class DecompositionAiService {
         StoredEvaluation evaluation = evaluation(evaluationId);
         int safeOffset = Math.max(0, offset);
         int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? PAGE_LIMIT_DEFAULT : limit));
+        List<FragmentSummaryRow> rows = fragmentSummaries(evaluation).values().stream()
+                .map(MutableFragmentSummary::toRow)
+                .sorted(Comparator.comparing(FragmentSummaryRow::path))
+                .toList();
+        return new DecompositionFragmentSummaryView(evaluationId, rows.size(), page(rows, safeOffset, safeLimit));
+    }
+
+    public synchronized DecompositionFragmentHistogramView getFragmentHistogram(
+            String evaluationId,
+            String path,
+            String label,
+            int offset,
+            int limit,
+            int exampleLimit
+    ) {
+        StoredEvaluation evaluation = evaluation(evaluationId);
+        int safeOffset = Math.max(0, offset);
+        int safeLimit = Math.max(1, limit <= 0 ? PAGE_LIMIT_DEFAULT : limit);
+        int safeExampleLimit = Math.max(1, exampleLimit <= 0 ? 3 : exampleLimit);
+        MutableFragmentSummary selected = selectFragmentSummary(evaluation, path, label);
+        List<FragmentHistogramRow> fullRows = selected.histogramRows(safeExampleLimit);
+        List<FragmentHistogramRow> rows = page(fullRows, safeOffset, safeLimit);
+        return new DecompositionFragmentHistogramView(
+                evaluation.evaluationId(),
+                evaluation.repositoryId(),
+                selected.path(),
+                selected.label(),
+                fullRows.size(),
+                rows.size(),
+                safeOffset,
+                safeLimit,
+                rows);
+    }
+
+    private Map<String, MutableFragmentSummary> fragmentSummaries(StoredEvaluation evaluation) {
         Map<String, MutableFragmentSummary> byPath = new LinkedHashMap<>();
         for (ResultEntry entry : evaluation.results()) {
             for (DecompositionNode node : entry.result().terminalNodes()) {
@@ -165,11 +203,48 @@ public final class DecompositionAiService {
                         ));
             }
         }
-        List<FragmentSummaryRow> rows = byPath.values().stream()
-                .map(MutableFragmentSummary::toRow)
-                .sorted(Comparator.comparing(FragmentSummaryRow::path))
-                .toList();
-        return new DecompositionFragmentSummaryView(evaluationId, rows.size(), page(rows, safeOffset, safeLimit));
+        return byPath;
+    }
+
+    private MutableFragmentSummary selectFragmentSummary(StoredEvaluation evaluation, String path, String label) {
+        boolean hasPath = path != null && !path.isBlank();
+        boolean hasLabel = label != null && !label.isBlank();
+        if (hasPath && hasLabel) {
+            throw new ChemOperationException("invalid_fragment_histogram_target", "Specify either path or label, not both.");
+        }
+        Map<String, MutableFragmentSummary> byPath = fragmentSummaries(evaluation);
+        if (byPath.isEmpty()) {
+            throw new ChemOperationException("fragment_histogram_empty", "Evaluation " + evaluation.evaluationId() + " has no labeled terminal fragments.");
+        }
+        if (hasPath) {
+            MutableFragmentSummary selected = byPath.get(path.trim());
+            if (selected == null) {
+                throw new ChemOperationException("fragment_path_not_found", "Fragment path " + path + " was not found. Available paths: " + String.join(", ", byPath.keySet()));
+            }
+            return selected;
+        }
+        if (hasLabel) {
+            List<MutableFragmentSummary> matches = byPath.values().stream()
+                    .filter(summary -> summary.label().equals(label.trim()))
+                    .toList();
+            if (matches.isEmpty()) {
+                String labels = byPath.values().stream().map(MutableFragmentSummary::label).distinct().sorted().collect(Collectors.joining(", "));
+                throw new ChemOperationException("fragment_label_not_found", "Fragment label " + label + " was not found. Available labels: " + labels);
+            }
+            if (matches.size() > 1) {
+                String paths = matches.stream().map(MutableFragmentSummary::path).sorted().collect(Collectors.joining(", "));
+                throw new ChemOperationException("ambiguous_fragment_label", "Fragment label " + label + " maps to multiple paths. Specify path instead. Candidate paths: " + paths);
+            }
+            return matches.getFirst();
+        }
+        if (byPath.size() == 1) {
+            return byPath.values().iterator().next();
+        }
+        String paths = byPath.values().stream()
+                .map(summary -> summary.path() + " (" + summary.label() + ")")
+                .sorted()
+                .collect(Collectors.joining(", "));
+        throw new ChemOperationException("fragment_histogram_target_required", "Specify path or label. Available fragment positions: " + paths);
     }
 
     private List<StoredStructure> resolveStructures(String repositoryId, List<String> structureIds) {
@@ -369,6 +444,19 @@ public final class DecompositionAiService {
         return List.copyOf(values.subList(from, to));
     }
 
+    private static String fragmentId(String signature) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(signature.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder("frag_");
+            for (int i = 0; i < 6; i++) {
+                builder.append(String.format("%02x", digest[i]));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", e);
+        }
+    }
+
     private record StoredConfig(String configId, String label, DecompositionConfig config) {
         private DecompositionConfigRecord toRecord() {
             List<String> problems = DecompositionConfigValidator.validate(config);
@@ -418,6 +506,14 @@ public final class DecompositionAiService {
             this.label = label;
         }
 
+        private String path() {
+            return path;
+        }
+
+        private String label() {
+            return label;
+        }
+
         private void add(FragmentExample example) {
             examples.add(example);
         }
@@ -427,6 +523,27 @@ public final class DecompositionAiService {
                     .collect(Collectors.groupingBy(FragmentExample::signature, LinkedHashMap::new, Collectors.counting()));
             int singletons = (int) bySignature.values().stream().filter(count -> count == 1).count();
             return new FragmentSummaryRow(path, label, examples.size(), bySignature.size(), singletons, List.copyOf(examples));
+        }
+
+        private List<FragmentHistogramRow> histogramRows(int exampleLimit) {
+            Map<String, List<FragmentExample>> bySignature = examples.stream()
+                    .collect(Collectors.groupingBy(FragmentExample::signature, LinkedHashMap::new, Collectors.toList()));
+            return bySignature.entrySet().stream()
+                    .map(entry -> {
+                        List<FragmentExample> occurrences = entry.getValue();
+                        List<String> structureIds = occurrences.stream().map(FragmentExample::structureId).distinct().toList();
+                        return new FragmentHistogramRow(
+                                fragmentId(entry.getKey()),
+                                occurrences.getFirst().fragmentSmiles(),
+                                occurrences.size(),
+                                structureIds,
+                                structureIds.stream().limit(exampleLimit).toList());
+                    })
+                    .sorted(Comparator
+                            .comparingInt(FragmentHistogramRow::support).reversed()
+                            .thenComparing(FragmentHistogramRow::fragmentSmiles)
+                            .thenComparing(FragmentHistogramRow::fragmentId))
+                    .toList();
         }
     }
 
@@ -519,6 +636,26 @@ public final class DecompositionAiService {
     public record DecompositionFailureGroups(String evaluationId, Map<String, List<MoleculeResultSummary>> groups) {}
 
     public record DecompositionFragmentSummaryView(String evaluationId, int totalRows, List<FragmentSummaryRow> rows) {}
+
+    public record DecompositionFragmentHistogramView(
+            String evaluationId,
+            String repositoryId,
+            String path,
+            String label,
+            int totalFragments,
+            int returnedFragments,
+            int offset,
+            int limit,
+            List<FragmentHistogramRow> rows
+    ) {}
+
+    public record FragmentHistogramRow(
+            String fragmentId,
+            String fragmentSmiles,
+            int support,
+            List<String> structureIds,
+            List<String> exampleStructureIds
+    ) {}
 
     public record FragmentSummaryRow(
             String path,
