@@ -45,6 +45,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -338,6 +339,76 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         );
         session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
         return rowSetSummary(session, rowSet);
+    }
+
+    @Override
+    public synchronized PrismRowSetColumnSummary summarizeRowSetByColumns(String sessionId,
+                                                                           String rowSetId,
+                                                                           List<String> columnIds,
+                                                                           Double threshold,
+                                                                           String thresholdDirection,
+                                                                           int topValuesLimit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowSet rowSet = rowSet(session, rowSetId);
+        List<PrismColumn> columns = summaryColumns(session, columnIds);
+        List<Integer> physicalRows = physicalRows(session, rowSet.rowIds());
+        List<PrismRuntimeColumnValueSummary> summaries = columns.stream()
+                .map(column -> summarizeColumn(column, physicalRows, threshold, thresholdDirection, topValuesLimit))
+                .toList();
+        return new PrismRowSetColumnSummary(
+                rowSetSummary(session, rowSet),
+                columns.stream().map(PrismColumn::id).toList(),
+                summaries
+        );
+    }
+
+    @Override
+    public synchronized PrismGroupingColumnSummary summarizeGroupingByColumns(String sessionId,
+                                                                              String groupingId,
+                                                                              List<String> columnIds,
+                                                                              boolean includeSingletons,
+                                                                              int offset,
+                                                                              int limit,
+                                                                              Double threshold,
+                                                                              String thresholdDirection,
+                                                                              int topValuesLimit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismGrouping grouping = grouping(session, groupingId);
+        List<PrismColumn> columns = summaryColumns(session, columnIds);
+        List<PrismGroup> filtered = grouping.groups().stream()
+                .filter(group -> includeSingletons || grouping.rowsInGroup(group.id()).size() > 1)
+                .sorted((a, b) -> Integer.compare(grouping.rowsInGroup(b.id()).size(), grouping.rowsInGroup(a.id()).size()))
+                .toList();
+        int safeOffset = Math.min(Math.max(0, offset), filtered.size());
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? 50 : limit));
+        int to = Math.min(safeOffset + safeLimit, filtered.size());
+        List<PrismGroupColumnSummaryRow> groups = filtered.subList(safeOffset, to).stream()
+                .map(group -> {
+                    List<Integer> physicalRows = physicalRows(session, grouping.rowsInGroup(group.id()));
+                    return new PrismGroupColumnSummaryRow(
+                            group.id(),
+                            group.label(),
+                            group.description(),
+                            group.parentGroupId(),
+                            group.representativeRowId(),
+                            physicalRows.size(),
+                            group.metadata(),
+                            columns.stream()
+                                    .map(column -> summarizeColumn(column, physicalRows, threshold, thresholdDirection, topValuesLimit))
+                                    .toList()
+                    );
+                })
+                .toList();
+        return new PrismGroupingColumnSummary(
+                groupingSummary(session, grouping),
+                columns.stream().map(PrismColumn::id).toList(),
+                includeSingletons,
+                filtered.size(),
+                groups.size(),
+                safeOffset,
+                safeLimit,
+                groups
+        );
     }
 
     @Override
@@ -997,6 +1068,174 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 subject == null ? structureValue(session, physicalRow) : subject.getSmiles(),
                 fields
         );
+    }
+
+    private List<PrismColumn> summaryColumns(ManagedPrismSession session, List<String> columnIds) {
+        if (columnIds == null || columnIds.isEmpty()) {
+            throw new ChemOperationException("invalid_arguments", "column_ids must not be empty.");
+        }
+        if (columnIds.size() > 25) {
+            throw new ChemOperationException("invalid_arguments", "A single summary request may include at most 25 column_ids.");
+        }
+        return columnIds.stream()
+                .map(columnId -> {
+                    String id = normalizeId(columnId, "columnId");
+                    return session.workspace().table().findColumn(id)
+                            .orElseThrow(() -> new ChemOperationException(
+                                    "prism_column_not_found",
+                                    "Prism column " + id + " does not exist."
+                            ));
+                })
+                .toList();
+    }
+
+    private List<Integer> physicalRows(ManagedPrismSession session, Iterable<String> rowIds) {
+        ArrayList<Integer> rows = new ArrayList<>();
+        for (String rowId : rowIds) {
+            int physicalRow = session.workspace().physicalRowForRowId(rowId)
+                    .orElseThrow(() -> new ChemOperationException("prism_row_not_found", "Prism row " + rowId + " does not exist."));
+            rows.add(physicalRow);
+        }
+        return List.copyOf(rows);
+    }
+
+    private PrismRuntimeColumnValueSummary summarizeColumn(PrismColumn column,
+                                                           List<Integer> physicalRows,
+                                                           Double threshold,
+                                                           String thresholdDirection,
+                                                           int topValuesLimit) {
+        return switch (column.type()) {
+            case NUMERIC, INTEGER -> summarizeNumericColumn(column, physicalRows, threshold, thresholdDirection);
+            default -> summarizeCategoricalColumn(column, physicalRows, topValuesLimit);
+        };
+    }
+
+    private PrismRuntimeColumnValueSummary summarizeNumericColumn(PrismColumn column,
+                                                                  List<Integer> physicalRows,
+                                                                  Double threshold,
+                                                                  String thresholdDirection) {
+        ArrayList<Double> values = new ArrayList<>();
+        for (int physicalRow : physicalRows) {
+            if (column.isMissing(physicalRow)) {
+                continue;
+            }
+            double value = column.doubleValueAt(physicalRow);
+            if (Double.isFinite(value)) {
+                values.add(value);
+            }
+        }
+        Collections.sort(values);
+        String direction = normalizeThresholdDirection(thresholdDirection);
+        Integer hitCount = null;
+        Double hitRate = null;
+        if (threshold != null) {
+            int hits = 0;
+            for (double value : values) {
+                if ("lte".equals(direction) ? value <= threshold : value >= threshold) {
+                    hits++;
+                }
+            }
+            hitCount = hits;
+            hitRate = values.isEmpty() ? null : (double) hits / values.size();
+        }
+        PrismColumnSchema schema = column.schema();
+        return new PrismRuntimeColumnValueSummary(
+                column.id(),
+                schema.displayName(),
+                column.type().name(),
+                schema.semanticType(),
+                schema.role(),
+                schema.unit(),
+                schema.endpointId(),
+                schema.direction(),
+                physicalRows.size(),
+                values.size(),
+                physicalRows.size() - values.size(),
+                new PrismNumericColumnStats(
+                        values.isEmpty() ? null : values.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN),
+                        percentile(values, 0.50),
+                        percentile(values, 0.25),
+                        percentile(values, 0.75),
+                        values.isEmpty() ? null : values.getFirst(),
+                        values.isEmpty() ? null : values.getLast(),
+                        threshold,
+                        direction,
+                        hitCount,
+                        hitRate
+                ),
+                null
+        );
+    }
+
+    private PrismRuntimeColumnValueSummary summarizeCategoricalColumn(PrismColumn column,
+                                                                      List<Integer> physicalRows,
+                                                                      int topValuesLimit) {
+        int safeLimit = Math.min(100, Math.max(1, topValuesLimit <= 0 ? 10 : topValuesLimit));
+        LinkedHashMap<String, Integer> counts = new LinkedHashMap<>();
+        int valid = 0;
+        for (int physicalRow : physicalRows) {
+            if (column.isMissing(physicalRow)) {
+                continue;
+            }
+            String value = column.formattedValueAt(physicalRow);
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            valid++;
+            counts.merge(value, 1, Integer::sum);
+        }
+        int denominator = Math.max(1, valid);
+        List<PrismCategoryFrequency> topValues = counts.entrySet().stream()
+                .sorted((a, b) -> {
+                    int byCount = Integer.compare(b.getValue(), a.getValue());
+                    return byCount != 0 ? byCount : a.getKey().compareTo(b.getKey());
+                })
+                .limit(safeLimit)
+                .map(entry -> new PrismCategoryFrequency(entry.getKey(), entry.getValue(), (double) entry.getValue() / denominator))
+                .toList();
+        PrismColumnSchema schema = column.schema();
+        return new PrismRuntimeColumnValueSummary(
+                column.id(),
+                schema.displayName(),
+                column.type().name(),
+                schema.semanticType(),
+                schema.role(),
+                schema.unit(),
+                schema.endpointId(),
+                schema.direction(),
+                physicalRows.size(),
+                valid,
+                physicalRows.size() - valid,
+                null,
+                new PrismCategoricalColumnStats(counts.size(), topValues)
+        );
+    }
+
+    private static Double percentile(List<Double> sorted, double p) {
+        if (sorted.isEmpty()) {
+            return null;
+        }
+        if (sorted.size() == 1) {
+            return sorted.getFirst();
+        }
+        double position = p * (sorted.size() - 1);
+        int lower = (int) Math.floor(position);
+        int upper = (int) Math.ceil(position);
+        if (lower == upper) {
+            return sorted.get(lower);
+        }
+        double fraction = position - lower;
+        return sorted.get(lower) * (1.0 - fraction) + sorted.get(upper) * fraction;
+    }
+
+    private static String normalizeThresholdDirection(String thresholdDirection) {
+        String direction = thresholdDirection == null || thresholdDirection.isBlank()
+                ? "gte"
+                : thresholdDirection.trim().toLowerCase(Locale.ROOT);
+        if (!direction.equals("gte") && !direction.equals("lte")) {
+            throw new ChemOperationException("invalid_arguments", "threshold_direction must be gte or lte.");
+        }
+        return direction;
     }
 
     private String stringValue(ManagedPrismSession session, int physicalRow, String columnId) {

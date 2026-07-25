@@ -35,6 +35,25 @@ public interface PrismBridgeService {
 
     PrismRowSetSummary createGroupRowSet(CreatePrismGroupRowSetRequest request);
 
+    PrismRowSetColumnSummary summarizeRowSetByColumns(
+            String sessionId,
+            String rowSetId,
+            List<String> columnIds,
+            Double threshold,
+            String thresholdDirection,
+            int topValuesLimit);
+
+    PrismGroupingColumnSummary summarizeGroupingByColumns(
+            String sessionId,
+            String groupingId,
+            List<String> columnIds,
+            boolean includeSingletons,
+            int offset,
+            int limit,
+            Double threshold,
+            String thresholdDirection,
+            int topValuesLimit);
+
     PrismRowSetMembersView getRowSetMembers(String sessionId, String rowSetId, int offset, int limit);
 
     PrismRowSetSummary createRowSetFromSubjectSet(CreatePrismRowSetFromSubjectSetRequest request);

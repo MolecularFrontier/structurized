@@ -40,6 +40,10 @@ import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismPackRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
+import tech.molecules.structurized.ai.prism.PrismGroupingColumnSummary;
+import tech.molecules.structurized.ai.prism.PrismRowSetColumnSummary;
+import tech.molecules.structurized.ai.prism.PrismGroupingSummary;
+import tech.molecules.structurized.ai.prism.PrismRowSetSummary;
 import tech.molecules.structurized.ai.prism.PrismMoleculeInput;
 import tech.molecules.structurized.ai.render.CompactStructureRenderer;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
@@ -471,6 +475,35 @@ final class McpChemistryTools {
                         optionalString(args, "row_set_id", null),
                         optionalString(args, "name", null),
                         optionalString(args, "description", null))));
+        add(result, "summarize_prism_row_set_by_columns", "Summarizes runtime Prism columns for one row set without materializing a repository. Numeric columns return distribution statistics; other columns return top formatted values.", schema(
+                required("session_id", "row_set_id", "column_ids"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Prism row set ID."),
+                arrayProp("column_ids", "string", "Runtime Prism column IDs to summarize."),
+                prop("threshold", "number", "Optional numeric threshold applied to numeric columns."),
+                prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
+                prop("top_values_limit", "integer", "Maximum top values for categorical/text columns. Defaults to 10."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                this::summarizePrismRowSetByColumns);
+        add(result, "summarize_prism_grouping_by_columns", "Summarizes runtime Prism columns for paged groups in a Prism grouping without materializing a repository.", schema(
+                required("session_id", "grouping_id", "column_ids"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("grouping_id", "string", "Prism grouping ID."),
+                arrayProp("column_ids", "string", "Runtime Prism column IDs to summarize within each group."),
+                prop("include_singletons", "boolean", "Whether to include singleton groups. Defaults to false."),
+                prop("offset", "integer", "Zero-based group offset after filtering and size sorting. Defaults to 0."),
+                prop("limit", "integer", "Maximum groups returned. Defaults to 50."),
+                prop("threshold", "number", "Optional numeric threshold applied to numeric columns."),
+                prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
+                prop("top_values_limit", "integer", "Maximum top values for categorical/text columns. Defaults to 10."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                this::summarizePrismGroupingByColumns);
         add(result, "cluster_prism_row_set", "Clusters structures from a managed Prism row set, publishes a reusable grouping, and optionally exposes its facet and similarity column.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -847,7 +880,7 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> cluster_prism_row_set -> get_prism_clustering for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns or cluster_prism_row_set -> summarize_prism_grouping_by_columns/get_prism_clustering for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
@@ -858,7 +891,7 @@ final class McpChemistryTools {
                     """;
             case "prism_workflow" -> """
                     # Prism Workflow
-                    Open a PrismPack directory with open_prism_pack, then call describe_prism_session_for_agent or list_prism_columns to inspect runtime columns, endpoint-like columns, structures, and row sets. Use create_prism_column_row_set to define an analysis scope without changing visible table filters, then cluster_prism_row_set to publish a reusable grouping into the same session.
+                    Open a PrismPack directory with open_prism_pack, then call describe_prism_session_for_agent or list_prism_columns to inspect runtime columns, endpoint-like columns, structures, and row sets. Use create_prism_column_row_set to define an analysis scope without changing visible table filters, summarize_prism_row_set_by_columns for compact endpoint/category summaries, then cluster_prism_row_set to publish a reusable grouping into the same session.
                     Open a TSV bundle with open_prism_dataset when canonical TSV subject sets and endpoint records are needed; inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
                     Use repository IDs returned by materialize_prism_subject_set for legacy structure search, clustering, and decomposition evaluation.
                     Endpoint summaries, create_endpoint_selection, create_subject_measurement_date_selection, and export_selection_table use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property/date subsets with operators gt/gte/lt/lte/eq and optional first/last measurement date bounds. create_subject_measurement_date_selection aggregates first/last measurement dates across all or selected endpoints and is the preferred way to identify likely newest compounds. export_selection_table writes long endpoint rows with first_measurement/last_measurement and optional subject aggregate measurement date columns.
@@ -866,9 +899,8 @@ final class McpChemistryTools {
             case "clustering_workflow" -> """
                     # Clustering Workflow
                     For a managed Prism session, create a scope with create_prism_column_row_set and run cluster_prism_row_set with a SkelSpheres threshold around 0.75-0.85. Structurized retains the rich artifact while Prism receives a reusable grouping; publish_columns also shows its categorical facet and adds representative similarity.
-                    Use list_prism_groupings and get_prism_grouping for provider-neutral inspection. Use get_prism_clustering and get_prism_cluster_members for rich clustering details. Call create_prism_group_row_set, or the compatibility create_prism_cluster_row_set, only for groups that should become named reusable scopes.
-                    The repository-based cluster_structures, get_clustering, and get_cluster_members tools remain available for standalone chemistry repositories and selections.
-                    Use summarize_clusters_by_endpoint and output_target:file for the legacy materialized-dataset workflow when complete per-cluster endpoint tables are required.
+                    Use list_prism_groupings and get_prism_grouping for provider-neutral inspection. Use summarize_prism_grouping_by_columns to compare runtime endpoint/category columns across groups without returning member rows. Use get_prism_clustering and get_prism_cluster_members for rich clustering details. Call create_prism_group_row_set, or the compatibility create_prism_cluster_row_set, only for groups that should become named reusable scopes.
+                    The repository-based cluster_structures, get_clustering, get_cluster_members, and summarize_clusters_by_endpoint tools remain available for standalone chemistry repositories and legacy materialized-dataset workflows.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules
@@ -1546,6 +1578,52 @@ final class McpChemistryTools {
 
     private static String valueString(Double value) {
         return value == null ? "" : value.toString();
+    }
+
+    private Object summarizePrismRowSetByColumns(ObjectNode args) {
+        PrismRowSetColumnSummary response = prism.summarizeRowSetByColumns(
+                requiredString(args, "session_id"),
+                requiredString(args, "row_set_id"),
+                stringList(args, "column_ids"),
+                optionalDouble(args, "threshold", null),
+                optionalString(args, "threshold_direction", "gte"),
+                optionalInt(args, "top_values_limit", 10)
+        );
+        return maybeFile(
+                args,
+                "summarize_prism_row_set_by_columns",
+                response,
+                new PrismRowSetColumnArtifactSummary(response.rowSet(), response.columnIds().size()),
+                response.columns().size()
+        );
+    }
+
+    private Object summarizePrismGroupingByColumns(ObjectNode args) {
+        PrismGroupingColumnSummary response = prism.summarizeGroupingByColumns(
+                requiredString(args, "session_id"),
+                requiredString(args, "grouping_id"),
+                stringList(args, "column_ids"),
+                optionalBoolean(args, "include_singletons", false),
+                optionalInt(args, "offset", 0),
+                optionalInt(args, "limit", 50),
+                optionalDouble(args, "threshold", null),
+                optionalString(args, "threshold_direction", "gte"),
+                optionalInt(args, "top_values_limit", 10)
+        );
+        return maybeFile(
+                args,
+                "summarize_prism_grouping_by_columns",
+                response,
+                new PrismGroupingColumnArtifactSummary(
+                        response.grouping(),
+                        response.columnIds().size(),
+                        response.totalGroups(),
+                        response.returnedGroups(),
+                        response.offset(),
+                        response.limit(),
+                        response.includeSingletons()),
+                response.returnedGroups()
+        );
     }
 
     private Object summarizeSelectionByEndpoint(ObjectNode args) {
@@ -2298,6 +2376,21 @@ final class McpChemistryTools {
             SelectionAiService.SelectionRecord selection,
             String datasetId,
             int endpointCount
+    ) {}
+
+    private record PrismRowSetColumnArtifactSummary(
+            PrismRowSetSummary rowSet,
+            int columnCount
+    ) {}
+
+    private record PrismGroupingColumnArtifactSummary(
+            PrismGroupingSummary grouping,
+            int columnCount,
+            int totalGroups,
+            int returnedGroups,
+            int offset,
+            int limit,
+            boolean includeSingletons
     ) {}
 
     private record EndpointClusterArtifactSummary(

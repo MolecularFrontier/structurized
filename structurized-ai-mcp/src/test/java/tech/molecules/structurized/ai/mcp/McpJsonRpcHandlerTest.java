@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(77, tools.size());
+        assertEquals(79, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -87,6 +87,8 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "list_prism_groupings"));
         assertTrue(hasTool(tools, "get_prism_grouping"));
         assertTrue(hasTool(tools, "create_prism_group_row_set"));
+        assertTrue(hasTool(tools, "summarize_prism_row_set_by_columns"));
+        assertTrue(hasTool(tools, "summarize_prism_grouping_by_columns"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));
         assertTrue(hasTool(tools, "create_decomposition_config"));
         assertTrue(hasTool(tools, "evaluate_decomposition"));
@@ -278,6 +280,38 @@ class McpJsonRpcHandlerTest {
                 """));
         assertEquals(2, grouping.at("/result/structuredContent/totalGroups").asInt());
         assertEquals("cluster_1", grouping.at("/result/structuredContent/groups/0/groupId").asText());
+
+        JsonNode rowSetSummary = call(handler, request(32, "summarize_prism_row_set_by_columns", """
+                {
+                  "session_id":"analysis_demo",
+                  "row_set_id":"measured",
+                  "column_ids":["pIC50","series"],
+                  "threshold":7.0,
+                  "top_values_limit":3
+                }
+                """));
+        assertEquals(2, rowSetSummary.at("/result/structuredContent/rowSet/rowCount").asInt());
+        assertEquals("pIC50", rowSetSummary.at("/result/structuredContent/columns/0/columnId").asText());
+        assertEquals(2, rowSetSummary.at("/result/structuredContent/columns/0/validCount").asInt());
+        assertEquals(6.65, rowSetSummary.at("/result/structuredContent/columns/0/numeric/median").asDouble(), 0.0001);
+        assertEquals(1, rowSetSummary.at("/result/structuredContent/columns/0/numeric/thresholdHitCount").asInt());
+        assertEquals("A", rowSetSummary.at("/result/structuredContent/columns/1/categorical/topValues/0/value").asText());
+
+        JsonNode groupSummary = call(handler, request(33, "summarize_prism_grouping_by_columns", """
+                {
+                  "session_id":"analysis_demo",
+                  "grouping_id":"rough",
+                  "column_ids":["pIC50"],
+                  "include_singletons":true,
+                  "threshold":7.0,
+                  "limit":1
+                }
+                """));
+        assertEquals(2, groupSummary.at("/result/structuredContent/totalGroups").asInt());
+        assertEquals(1, groupSummary.at("/result/structuredContent/returnedGroups").asInt());
+        assertEquals("cluster_1", groupSummary.at("/result/structuredContent/groups/0/groupId").asText());
+        assertEquals(1, groupSummary.at("/result/structuredContent/groups/0/columns/0/validCount").asInt());
+        assertEquals(1, groupSummary.at("/result/structuredContent/groups/0/columns/0/numeric/thresholdHitCount").asInt());
 
         JsonNode genericGroupSet = call(handler, request(31, "create_prism_group_row_set", """
                 {
