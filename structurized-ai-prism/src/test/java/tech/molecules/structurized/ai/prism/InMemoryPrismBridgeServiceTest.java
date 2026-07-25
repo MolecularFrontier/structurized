@@ -9,6 +9,7 @@ import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryServ
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 import tech.molecules.structurized.ai.search.OclStructureSearchService;
 import tech.molecules.structurized.ai.search.StructureSearchService;
+import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.result.NumericResult;
 
 import java.nio.file.Files;
@@ -261,6 +262,66 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(3L, ctx.prism.getSessionInfo("cluster_demo").summary().revision());
     }
     @Test
+    void evaluatesPredictionsAsSessionArtifactsAndColumns() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "prediction_demo", "Prediction demo"));
+
+        List<PredictionCapability> capabilities = ctx.prism.listPredictionCapabilities("prediction_demo", "pIC50");
+        assertTrue(capabilities.stream()
+                .anyMatch(capability -> capability.capabilityId().equals("reference/pic50")));
+        assertEquals("reference/pic50", ctx.prism.describePredictionCapability(
+                "prediction_demo", "reference/pic50").workflowId());
+        PredictionRunSummary summary = ctx.prism.evaluatePrismPrediction(new EvaluatePrismPredictionRequest(
+                "prediction_demo",
+                "all",
+                "pred1",
+                "Reference potency predictions",
+                "pIC50",
+                null,
+                "ALL",
+                true,
+                true,
+                true,
+                true
+        ));
+        PredictionRunView run = ctx.prism.getPredictionRun("prediction_demo", "pred1", 0, 10);
+        List<String> columnIds = ctx.prism.listColumns("prediction_demo").stream()
+                .map(PrismColumnSummary::columnId)
+                .toList();
+
+        assertEquals("pred1", summary.analysis().analysisId());
+        assertEquals("prediction_run", summary.analysis().type());
+        assertEquals("reference/pic50", summary.capabilityId());
+        assertEquals("reference", summary.providerId());
+        assertEquals("reference/pic50", summary.workflowId());
+        assertEquals(3, summary.inputCount());
+        assertEquals(3, summary.valueCount());
+        assertEquals(3, run.totalValues());
+        assertTrue(columnIds.contains("pred1.pIC50_predicted.prediction"));
+        assertTrue(columnIds.contains("pred1.pIC50_predicted.status"));
+        assertTrue(columnIds.contains("pred1.pIC50_predicted.uncertainty"));
+        assertTrue(columnIds.contains("pred1.pIC50_predicted.applicability"));
+        assertEquals(1, ctx.prism.listAnalyses("prediction_demo").size());
+        assertEquals(2L, ctx.prism.getSessionInfo("prediction_demo").summary().revision());
+    }
+
+    @Test
+    void exposesPrismPackPredictionCapabilitiesThroughManagedSessions() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openPack(new OpenPrismPackRequest(predictionPack(), "apy_pack", "APY pack"));
+
+        List<PredictionCapability> capabilities = ctx.prism.listPredictionCapabilities("apy_pack", "hlm_clint");
+        PredictionCapability capability = ctx.prism.describePredictionCapability("apy_pack", "apy.hlm.production");
+
+        assertEquals(1, capabilities.size());
+        assertEquals("apy.hlm.production", capability.capabilityId());
+        assertEquals("apy", capability.providerId());
+        assertEquals("apy://hlm-production", capability.workflowId());
+        assertEquals("hlm_clint.predicted", capability.predictedEndpointId());
+        assertEquals("HLM", capability.metadata().get("assay"));
+    }
+
+    @Test
     void materializesSubjectSetAsChemistryRepositoryAndKeepsEndpointValuesInPrism() throws Exception {
         Path dataset = prismDataset();
         TestContext ctx = context();
@@ -396,6 +457,33 @@ class InMemoryPrismBridgeServiceTest {
                 "subject_set_id\tsubject_id",
                 ""
         ));
+        return dir;
+    }
+
+    private Path predictionPack() throws Exception {
+        Path dir = tempDir.resolve("prediction-pack.prismpack");
+        Files.createDirectories(dir.resolve("data"));
+        Files.createDirectories(dir.resolve("schema"));
+        Files.createDirectories(dir.resolve("semantics"));
+        Files.writeString(dir.resolve("prism-pack.json"), """
+                {"prismPackVersion":"0.2","dataframe":{"path":"data/dataframe.tsv","schema":"schema/dataframe.schema.json"},"molecules":"semantics/molecules.json","endpoints":"semantics/endpoints.json","predictions":"semantics/predictions.json"}
+                """);
+        Files.writeString(dir.resolve("schema/dataframe.schema.json"), """
+                {"columns":[{"name":"compound_id","type":"string"},{"name":"smiles","type":"string","semanticType":"chemical_structure"},{"name":"hlm_clint","type":"number","endpointId":"hlm_clint"}]}
+                """);
+        Files.writeString(dir.resolve("data/dataframe.tsv"), """
+                compound_id	smiles	hlm_clint
+                CMP-1	CCN	12.0
+                """);
+        Files.writeString(dir.resolve("semantics/molecules.json"), """
+                {"primaryStructureColumn":"smiles","structureFormat":"smiles","compoundIdColumn":"compound_id"}
+                """);
+        Files.writeString(dir.resolve("semantics/endpoints.json"), """
+                {"endpoints":[{"id":"hlm_clint","column":"hlm_clint","displayName":"HLM CLint","unit":"uL/min/mg","direction":"lower_is_better"}]}
+                """);
+        Files.writeString(dir.resolve("semantics/predictions.json"), """
+                {"capabilities":[{"capabilityId":"apy.hlm.production","endpointId":"hlm_clint","predictedEndpointId":"hlm_clint.predicted","displayName":"APY HLM production","providerId":"apy","workflowId":"apy://hlm-production","workflowVersion":"production","status":"available","priority":100,"structureColumn":"smiles","structureFormat":"smiles","metadata":{"assay":"HLM"}}]}
+                """);
         return dir;
     }
 

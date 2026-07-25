@@ -34,6 +34,7 @@ import tech.molecules.structurized.ai.prism.CreatePrismColumnRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismEndpointRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.CombinePrismRowSetsRequest;
+import tech.molecules.structurized.ai.prism.EvaluatePrismPredictionRequest;
 import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
 import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
@@ -259,6 +260,56 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
                 args -> prism.describeSessionForAgent(requiredString(args, "session_id")));
+        add(result, "list_prediction_capabilities", "Lists endpoint-linked prediction capabilities available for one managed Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("endpoint_id", "string", "Optional measured or predicted Prism endpoint ID.")),
+                args -> prism.listPredictionCapabilities(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "endpoint_id", null)));
+        add(result, "describe_prediction_capability", "Returns provider, workflow, endpoint mapping, status, and metadata for one prediction capability.", schema(
+                required("session_id", "capability_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("capability_id", "string", "Prediction capability ID.")),
+                args -> prism.describePredictionCapability(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "capability_id")));
+        add(result, "evaluate_prism_prediction", "Runs one endpoint-centered prediction capability for a Prism row set and publishes result columns without overwriting measured data.", schema(
+                required("session_id", "endpoint_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Source Prism row set. Defaults to all."),
+                prop("prediction_run_id", "string", "Optional unique prediction run ID."),
+                prop("label", "string", "Optional human-readable run label."),
+                prop("endpoint_id", "string", "Measured Prism endpoint ID to predict or fill."),
+                prop("capability_id", "string", "Optional exact prediction capability ID. Defaults to the highest-priority compatible capability."),
+                prop("mode", "string", "MISSING_ONLY or ALL. Defaults to MISSING_ONLY."),
+                prop("publish_value", "boolean", "Publish prediction value columns. Defaults to true."),
+                prop("publish_status", "boolean", "Publish prediction status columns. Defaults to true."),
+                prop("publish_uncertainty", "boolean", "Publish uncertainty columns. Defaults to true."),
+                prop("publish_applicability", "boolean", "Publish applicability columns. Defaults to true.")),
+                args -> prism.evaluatePrismPrediction(new EvaluatePrismPredictionRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "row_set_id", "all"),
+                        optionalString(args, "prediction_run_id", null),
+                        optionalString(args, "label", null),
+                        requiredString(args, "endpoint_id"),
+                        optionalString(args, "capability_id", null),
+                        optionalString(args, "mode", "MISSING_ONLY"),
+                        optionalNullableBoolean(args, "publish_value"),
+                        optionalNullableBoolean(args, "publish_status"),
+                        optionalNullableBoolean(args, "publish_uncertainty"),
+                        optionalNullableBoolean(args, "publish_applicability"))));
+        add(result, "get_prediction_run", "Returns a paged, provenance-rich prediction run artifact for one managed Prism session.", schema(
+                required("session_id", "prediction_run_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("prediction_run_id", "string", "Prediction run artifact ID."),
+                prop("offset", "integer", "Zero-based value offset."),
+                prop("limit", "integer", "Maximum prediction values returned.")),
+                args -> prism.getPredictionRun(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "prediction_run_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
         add(result, "list_prism_molecule_lists", "Lists lightweight ordered molecule-document lists in one managed Prism session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),

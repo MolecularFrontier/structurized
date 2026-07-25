@@ -38,7 +38,8 @@ public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
         context.frame().setTitle(context.frame().getTitle() + " [" + managed.sessionId() + "]");
         PrismMoleculeWorkspacePanel moleculePanel = new PrismMoleculeWorkspacePanel(
                 managed.moleculeWorkspace(),
-                context.workspace().model()
+                context.workspace().model(),
+                context.workspace()::focusColumnInspector
         );
         context.workspace().addApplicationTab("molecules", "Molecules", moleculePanel);
         SharedSessionRefreshBinding binding = new SharedSessionRefreshBinding(

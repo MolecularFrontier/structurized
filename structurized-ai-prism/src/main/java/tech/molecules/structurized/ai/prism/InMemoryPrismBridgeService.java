@@ -25,6 +25,7 @@ import tech.molecules.structurized.prism.engine.TextPatternMode;
 import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
 import tech.molecules.structurized.prism.model.CategoryDefinition;
+import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.model.NumericEndpointMeta;
 import tech.molecules.structurized.prism.provider.SubjectRecord;
@@ -61,6 +62,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     private final StructureRepositoryService repositories;
     private final PrismArtifactRegistry artifactRegistry;
     private final PrismGroupingClusteringService clustering;
+    private final PrismPredictionService predictions;
     private final PrismSessionRegistry sessionRegistry;
     private final OclMoleculeDocumentCodec moleculeCodec = new OclMoleculeDocumentCodec();
     private final Map<String, MaterializationMapping> materializationsByRepositoryId = new LinkedHashMap<>();
@@ -76,10 +78,18 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     public InMemoryPrismBridgeService(StructureRepositoryService repositories,
                                       PrismSessionRegistry sessionRegistry,
                                       PrismArtifactRegistry artifactRegistry) {
+        this(repositories, sessionRegistry, artifactRegistry, InMemoryPredictionRegistry.referenceRegistry());
+    }
+
+    public InMemoryPrismBridgeService(StructureRepositoryService repositories,
+                                      PrismSessionRegistry sessionRegistry,
+                                      PrismArtifactRegistry artifactRegistry,
+                                      PredictionRegistry predictionRegistry) {
         this.repositories = Objects.requireNonNull(repositories, "repositories");
         this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry");
         this.artifactRegistry = Objects.requireNonNull(artifactRegistry, "artifactRegistry");
         this.clustering = new PrismGroupingClusteringService(this.artifactRegistry);
+        this.predictions = new PrismPredictionService(this.artifactRegistry, Objects.requireNonNull(predictionRegistry, "predictionRegistry"));
     }
 
     @Override
@@ -578,6 +588,36 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     public synchronized List<PrismAnalysisSummary> listAnalyses(String sessionId) {
         ManagedPrismSession session = session(sessionId);
         return artifactRegistry.summaries(session.sessionId());
+    }
+
+    @Override
+    public synchronized List<PredictionCapability> listPredictionCapabilities(String sessionId, String endpointId) {
+        ManagedPrismSession session = session(sessionId);
+        return predictions.listCapabilities(session, endpoints(session), endpointId);
+    }
+
+    @Override
+    public synchronized PredictionCapability describePredictionCapability(String sessionId, String capabilityId) {
+        ManagedPrismSession session = session(sessionId);
+        return predictions.describeCapability(session, endpoints(session), capabilityId);
+    }
+
+    @Override
+    public synchronized PredictionRunSummary evaluatePrismPrediction(EvaluatePrismPredictionRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? "all"
+                : request.rowSetId().trim();
+        PrismRowSet sourceRowSet = rowSet(session, rowSetId);
+        PrismRowSetStructureCollection structures = rowSetStructures(session.sessionId(), sourceRowSet.id());
+        return predictions.evaluate(session, endpoints(session), sourceRowSet, structures, request);
+    }
+
+
+    @Override
+    public synchronized PredictionRunView getPredictionRun(String sessionId, String predictionRunId, int offset, int limit) {
+        return predictions.getRun(session(sessionId), predictionRunId, offset, limit);
     }
 
     @Override

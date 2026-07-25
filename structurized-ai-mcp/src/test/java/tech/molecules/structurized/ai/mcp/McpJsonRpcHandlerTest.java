@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(73, tools.size());
+        assertEquals(77, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -64,6 +64,10 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_prism_session_info"));
         assertTrue(hasTool(tools, "list_prism_columns"));
         assertTrue(hasTool(tools, "describe_prism_session_for_agent"));
+        assertTrue(hasTool(tools, "list_prediction_capabilities"));
+        assertTrue(hasTool(tools, "describe_prediction_capability"));
+        assertTrue(hasTool(tools, "evaluate_prism_prediction"));
+        assertTrue(hasTool(tools, "get_prediction_run"));
         assertTrue(hasTool(tools, "list_prism_molecule_lists"));
         assertTrue(hasTool(tools, "get_prism_molecule_list"));
         assertTrue(hasTool(tools, "create_prism_molecule_list"));
@@ -137,6 +141,40 @@ class McpJsonRpcHandlerTest {
                 """));
         assertEquals(2, listed.at("/result/structuredContent").size());
         assertEquals("ideas", listed.at("/result/structuredContent/1/listId").asText());
+    }
+
+    @Test
+    void agentCanEvaluatePrismPredictions() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String path = prismDataset().toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"predict\"}"));
+
+        JsonNode capabilities = call(handler, request(2, "list_prediction_capabilities", "{\"session_id\":\"predict\",\"endpoint_id\":\"pIC50\"}"));
+        assertEquals("reference/pic50", capabilities.at("/result/structuredContent/0/capabilityId").asText());
+
+        JsonNode capability = call(handler, request(3, "describe_prediction_capability", "{\"session_id\":\"predict\",\"capability_id\":\"reference/pic50\"}"));
+        assertEquals("pIC50.predicted", capability.at("/result/structuredContent/predictedEndpointId").asText());
+
+        JsonNode evaluated = call(handler, request(4, "evaluate_prism_prediction", """
+                {
+                  "session_id":"predict",
+                  "prediction_run_id":"pred_mcp",
+                  "endpoint_id":"pIC50",
+                  "mode":"ALL"
+                }
+                """));
+        assertEquals("pred_mcp", evaluated.at("/result/structuredContent/analysis/analysisId").asText(), evaluated.toPrettyString());
+        assertTrue(evaluated.at("/result/structuredContent/valueCount").asInt() > 0);
+        assertTrue(evaluated.at("/result/structuredContent/publishedColumnIds").toString().contains("pred_mcp.pIC50_predicted.prediction"));
+
+        JsonNode run = call(handler, request(5, "get_prediction_run", """
+                {"session_id":"predict","prediction_run_id":"pred_mcp","limit":1}
+                """));
+        assertEquals("pred_mcp", run.at("/result/structuredContent/summary/analysis/analysisId").asText());
+        assertEquals(1, run.at("/result/structuredContent/values").size());
+
+        JsonNode columns = call(handler, request(6, "list_prism_columns", "{\"session_id\":\"predict\"}"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("pred_mcp.pIC50_predicted.status"));
     }
 
     @Test

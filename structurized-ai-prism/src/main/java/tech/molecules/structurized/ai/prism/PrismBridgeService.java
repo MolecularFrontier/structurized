@@ -1,5 +1,7 @@
 package tech.molecules.structurized.ai.prism;
 
+import tech.molecules.structurized.prism.prediction.PredictionCapability;
+
 import java.util.List;
 
 public interface PrismBridgeService {
@@ -48,6 +50,15 @@ public interface PrismBridgeService {
     PrismClusteringSummary clusterRowSet(ClusterPrismRowSetRequest request);
 
     List<PrismAnalysisSummary> listAnalyses(String sessionId);
+
+    List<PredictionCapability> listPredictionCapabilities(String sessionId, String endpointId);
+
+    PredictionCapability describePredictionCapability(String sessionId, String capabilityId);
+
+    PredictionRunSummary evaluatePrismPrediction(EvaluatePrismPredictionRequest request);
+
+
+    PredictionRunView getPredictionRun(String sessionId, String predictionRunId, int offset, int limit);
 
     PrismClusteringView getClustering(String sessionId, String analysisId, boolean includeSingletons, int offset, int limit);
 
