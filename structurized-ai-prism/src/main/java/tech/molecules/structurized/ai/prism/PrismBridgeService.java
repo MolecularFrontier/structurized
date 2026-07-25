@@ -5,7 +5,29 @@ import java.util.List;
 public interface PrismBridgeService {
     PrismDatasetSummary openDataset(OpenPrismDatasetRequest request);
 
+    PrismSessionSummary openPack(OpenPrismPackRequest request);
+
     List<PrismDatasetSummary> listDatasets();
+
+    List<PrismSessionSummary> listSessions();
+
+    PrismSessionInfo getSessionInfo(String sessionId);
+
+    List<PrismColumnSummary> listColumns(String sessionId);
+
+    PrismSessionAgentDescription describeSessionForAgent(String sessionId);
+
+    List<PrismRowSetSummary> listRowSets(String sessionId);
+
+    PrismRowSetMembersView getRowSetMembers(String sessionId, String rowSetId, int offset, int limit);
+
+    PrismRowSetSummary createRowSetFromSubjectSet(CreatePrismRowSetFromSubjectSetRequest request);
+
+    PrismRowSetSummary createEndpointRowSet(CreatePrismEndpointRowSetRequest request);
+
+    PrismRowSetSummary combineRowSets(CombinePrismRowSetsRequest request);
+
+    PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId);
 
     PrismDatasetInfo getDatasetInfo(String datasetId);
 

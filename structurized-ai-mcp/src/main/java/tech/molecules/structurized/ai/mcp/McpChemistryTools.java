@@ -25,9 +25,13 @@ import tech.molecules.structurized.ai.model.SubstructureSearchMatch;
 import tech.molecules.structurized.ai.model.SubstructureSearchResult;
 import tech.molecules.structurized.ai.model.StructureRef;
 import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismEndpointRowSetRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromSubjectSetRequest;
+import tech.molecules.structurized.ai.prism.CombinePrismRowSetsRequest;
 import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
 import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
+import tech.molecules.structurized.ai.prism.OpenPrismPackRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.render.CompactStructureRenderer;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
@@ -216,9 +220,103 @@ final class McpChemistryTools {
                         Path.of(requiredString(args, "path")),
                         optionalString(args, "dataset_id", null),
                         optionalString(args, "label", null))));
-        add(result, "list_prism_datasets", "Lists loaded PRISM dataset sessions.", schema(),
+        add(result, "open_prism_pack", "Opens a PrismPack directory as a managed PrismSession without TSV materialization.", schema(
+                required("path"),
+                prop("path", "string", "Path to a PrismPack directory."),
+                prop("session_id", "string", "Optional managed Prism session ID."),
+                prop("label", "string", "Optional display label.")),
+                args -> prism.openPack(new OpenPrismPackRequest(
+                        Path.of(requiredString(args, "path")),
+                        optionalString(args, "session_id", null),
+                        optionalString(args, "label", null))));
+        add(result, "list_prism_datasets", "Lists loaded PRISM dataset sessions. Legacy alias for session listing.", schema(),
                 args -> prism.listDatasets());
-        add(result, "get_prism_dataset_info", "Returns counts, subject sets, and endpoint summaries for one PRISM dataset.", schema(
+        add(result, "list_prism_sessions", "Lists managed Prism analysis sessions backed by real PrismSession workspaces.", schema(),
+                args -> prism.listSessions());
+        add(result, "get_prism_session_info", "Returns counts, endpoints, subject sets, row sets, and revision for one managed Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.getSessionInfo(requiredString(args, "session_id")));
+        add(result, "list_prism_columns", "Lists runtime PrismSession columns with schema metadata and missing-value counts.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listColumns(requiredString(args, "session_id")));
+        add(result, "describe_prism_session_for_agent", "Returns an agent-oriented overview of one PrismSession, including key columns and row sets.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.describeSessionForAgent(requiredString(args, "session_id")));
+        add(result, "list_prism_row_sets", "Lists Prism row sets for a managed session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listRowSets(requiredString(args, "session_id")));
+        add(result, "get_prism_row_set_members", "Returns paged row members for a Prism session row set.", schema(
+                required("session_id", "row_set_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Prism row set ID."),
+                prop("offset", "integer", "Zero-based row offset."),
+                prop("limit", "integer", "Maximum rows returned.")),
+                args -> prism.getRowSetMembers(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "row_set_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "create_prism_row_set_from_subject_set", "Creates or returns a Prism row set from a PRISM subject set without materializing a repository.", schema(
+                required("session_id", "subject_set_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("subject_set_id", "string", "PRISM subject set ID."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                args -> prism.createRowSetFromSubjectSet(new CreatePrismRowSetFromSubjectSetRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "subject_set_id"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null))));
+        add(result, "create_prism_endpoint_row_set", "Creates a Prism row set from endpoint mean and/or endpoint measurement-date filters without repository materialization.", schema(
+                required("session_id", "endpoint_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("endpoint_id", "string", "PRISM endpoint ID."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("operator", "string", "Optional numeric mean operator: gt, gte, lt, lte, or eq."),
+                prop("value", "number", "Optional numeric threshold compared against endpoint mean."),
+                prop("measurement_date_field", "string", "first or last measurement date. Defaults to last."),
+                prop("measured_after", "string", "Inclusive measurement date lower bound, YYYY-MM-DD or ISO instant."),
+                prop("measured_before", "string", "Inclusive measurement date upper bound, YYYY-MM-DD or ISO instant."),
+                prop("require_measured_date", "boolean", "Whether missing dates are excluded when date bounds are supplied. Defaults to true.")),
+                args -> prism.createEndpointRowSet(new CreatePrismEndpointRowSetRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "endpoint_id"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "operator", null),
+                        optionalDouble(args, "value", null),
+                        optionalString(args, "measurement_date_field", null),
+                        optionalString(args, "measured_after", null),
+                        optionalString(args, "measured_before", null),
+                        optionalNullableBoolean(args, "require_measured_date"))));
+        add(result, "combine_prism_row_sets", "Creates a new Prism row set from existing session row sets using union/merge, intersect, or subtract.", schema(
+                required("session_id", "operation", "row_set_ids"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("operation", "string", "union, merge, intersect, or subtract."),
+                arrayProp("row_set_ids", "string", "Input Prism row set IDs. For subtract, the first row set is the minuend."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                args -> prism.combineRowSets(new CombinePrismRowSetsRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null),
+                        requiredString(args, "operation"),
+                        stringList(args, "row_set_ids"))));
+        add(result, "get_prism_row_set_structures", "Returns lazy structure entries for a Prism session row set without copying them into a repository.", schema(
+                required("session_id", "row_set_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Prism row set ID.")),
+                args -> prism.rowSetStructures(requiredString(args, "session_id"), requiredString(args, "row_set_id")));
+        add(result, "get_prism_dataset_info", "Returns counts, subject sets, and endpoint summaries for one PRISM dataset/session.", schema(
                 required("dataset_id"),
                 prop("dataset_id", "string", "Loaded PRISM dataset ID.")),
                 args -> prism.getDatasetInfo(requiredString(args, "dataset_id")));
@@ -530,7 +628,7 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> inspect row sets/columns for PrismPack sessions; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint for TSV-backed workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
@@ -541,8 +639,9 @@ final class McpChemistryTools {
                     """;
             case "prism_workflow" -> """
                     # Prism Workflow
-                    Open a TSV bundle with open_prism_dataset, inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
-                    Use repository IDs returned by materialize_prism_subject_set for structure search, clustering, and decomposition evaluation.
+                    Open a PrismPack directory with open_prism_pack, then call describe_prism_session_for_agent or list_prism_columns to inspect runtime columns, endpoint-like columns, structures, and row sets.
+                    Open a TSV bundle with open_prism_dataset when canonical TSV subject sets and endpoint records are needed; inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
+                    Use repository IDs returned by materialize_prism_subject_set for legacy structure search, clustering, and decomposition evaluation.
                     Endpoint summaries, create_endpoint_selection, create_subject_measurement_date_selection, and export_selection_table use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property/date subsets with operators gt/gte/lt/lte/eq and optional first/last measurement date bounds. create_subject_measurement_date_selection aggregates first/last measurement dates across all or selected endpoints and is the preferred way to identify likely newest compounds. export_selection_table writes long endpoint rows with first_measurement/last_measurement and optional subject aggregate measurement date columns.
                     """;
             case "clustering_workflow" -> """
@@ -1714,9 +1813,14 @@ final class McpChemistryTools {
     }
 
     private static boolean optionalBoolean(ObjectNode args, String name, boolean defaultValue) {
+        Boolean value = optionalNullableBoolean(args, name);
+        return value == null ? defaultValue : value;
+    }
+
+    private static Boolean optionalNullableBoolean(ObjectNode args, String name) {
         JsonNode node = args.get(name);
         if (node == null || node.isNull()) {
-            return defaultValue;
+            return null;
         }
         if (!node.isBoolean()) {
             throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be a boolean.");

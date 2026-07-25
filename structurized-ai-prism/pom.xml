@@ -23,7 +23,7 @@
         </dependency>
         <dependency>
             <groupId>tech.molecules</groupId>
-            <artifactId>prism-core</artifactId>
+            <artifactId>prism-engine</artifactId>
             <version>${prism.version}</version>
         </dependency>
 

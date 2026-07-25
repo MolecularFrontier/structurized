@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class InMemoryPrismBridgeServiceTest {
     @TempDir
@@ -40,6 +41,61 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(2, subjects.size());
         assertEquals("CMP-001", subjects.getFirst().subjectId());
         assertEquals("chemist-a", subjects.getFirst().metadata().get("chemist"));
+    }
+
+    @Test
+    void opensManagedSessionAndCreatesSessionBackedRowSets() throws Exception {
+        Path dataset = prismDataset();
+        TestContext ctx = context();
+
+        PrismDatasetSummary opened = ctx.prism.openDataset(new OpenPrismDatasetRequest(dataset, "demo", "Demo dataset"));
+        PrismSessionInfo info = ctx.prism.getSessionInfo("demo");
+        PrismRowSetSummary hits = ctx.prism.createRowSetFromSubjectSet(
+                new CreatePrismRowSetFromSubjectSetRequest("demo", "hits", null, null, null));
+        PrismRowSetSummary potent = ctx.prism.createEndpointRowSet(
+                new CreatePrismEndpointRowSetRequest("demo", "pIC50", "potent", null, "gte", 7.0, null, null, null, null));
+        PrismRowSetSummary combined = ctx.prism.combineRowSets(
+                new CombinePrismRowSetsRequest("demo", "combined", "Combined", "", "intersect", List.of("hits", "potent")));
+        PrismRowSetMembersView members = ctx.prism.getRowSetMembers("demo", "combined", 0, 10);
+        PrismRowSetStructureCollection structures = ctx.prism.rowSetStructures("demo", "combined");
+
+        assertEquals("demo", opened.sessionId());
+        assertEquals("demo", opened.datasetId());
+        assertEquals("demo", info.summary().sessionId());
+        assertEquals(4, info.summary().totalRowCount());
+        assertEquals("hits", hits.rowSetId());
+        assertEquals(2, hits.rowCount());
+        assertEquals(1, potent.rowCount());
+        assertEquals(1, combined.rowCount());
+        assertEquals("CMP-001", members.members().getFirst().rowId());
+        assertEquals(1, structures.structureCount());
+        assertEquals("c1ccncc1", structures.structures().getFirst().smiles());
+    }
+
+    @Test
+    void opensMoonshotPrismPackAndDescribesColumnsForAgents() throws Exception {
+        Path moonshot = moonshotPrismPack();
+        assumeTrue(Files.isDirectory(moonshot), "Moonshot PrismPack example is not available in the sibling prism checkout.");
+        TestContext ctx = context();
+
+        PrismSessionSummary opened = ctx.prism.openPack(new OpenPrismPackRequest(moonshot, "moonshot", "Moonshot"));
+        PrismSessionInfo info = ctx.prism.getSessionInfo("moonshot");
+        List<PrismColumnSummary> columns = ctx.prism.listColumns("moonshot");
+        PrismSessionAgentDescription description = ctx.prism.describeSessionForAgent("moonshot");
+        PrismRowSetMembersView members = ctx.prism.getRowSetMembers("moonshot", "all", 0, 3);
+        PrismRowSetStructureCollection structures = ctx.prism.rowSetStructures("moonshot", "all");
+
+        assertEquals("moonshot", opened.sessionId());
+        assertTrue(opened.totalRowCount() > 0);
+        assertEquals("moonshot", info.summary().sessionId());
+        assertTrue(columns.stream().anyMatch(column -> column.columnId().equals("smiles")));
+        assertTrue(description.structureColumns().stream().anyMatch(column -> column.columnId().equals("smiles")));
+        assertTrue(description.endpointColumns().stream().anyMatch(column -> column.columnId().equals("mpro_fluorescence_pIC50")));
+        assertTrue(description.semanticTypeCounts().containsKey("chemical_structure"));
+        assertEquals(0, ctx.prism.listSubjectSets("moonshot").size());
+        assertEquals(3, members.members().size());
+        assertTrue(members.members().getFirst().fields().containsKey("prism.column.smiles"));
+        assertTrue(structures.structureCount() > 0);
     }
 
     @Test
@@ -104,6 +160,20 @@ class InMemoryPrismBridgeServiceTest {
     private TestContext context() {
         StructureRepositoryService repositories = new InMemoryStructureRepositoryService();
         return new TestContext(repositories, new InMemoryPrismBridgeService(repositories), new OclStructureSearchService(repositories));
+    }
+
+    private static Path moonshotPrismPack() {
+        Path cwd = Path.of("").toAbsolutePath().normalize();
+        Path[] candidates = {
+                cwd.resolve("../prism/examples/moonshot-medchem.prismpack").normalize(),
+                cwd.resolve("../../prism/examples/moonshot-medchem.prismpack").normalize()
+        };
+        for (Path candidate : candidates) {
+            if (Files.isDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        return candidates[0];
     }
 
     private Path prismDataset() throws Exception {

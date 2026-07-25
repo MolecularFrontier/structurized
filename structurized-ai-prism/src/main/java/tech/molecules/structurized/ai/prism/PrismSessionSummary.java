@@ -1,13 +1,15 @@
 package tech.molecules.structurized.ai.prism;
 
-public record PrismDatasetSummary(
+public record PrismSessionSummary(
         String sessionId,
         String datasetId,
         String label,
         String sourcePath,
-        int subjectCount,
-        int subjectSetCount,
+        int totalRowCount,
+        int visibleRowCount,
+        int visibleColumnCount,
+        int rowSetCount,
         int endpointCount,
         int endpointValueCount,
-        int structureSubjectCount
+        long revision
 ) {}

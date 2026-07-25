@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class McpJsonRpcHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -49,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(49, tools.size());
+        assertEquals(60, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -58,6 +59,17 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "search_substructure"));
         assertTrue(hasTool(tools, "cut_bonds"));
         assertTrue(hasTool(tools, "open_prism_dataset"));
+        assertTrue(hasTool(tools, "open_prism_pack"));
+        assertTrue(hasTool(tools, "list_prism_sessions"));
+        assertTrue(hasTool(tools, "get_prism_session_info"));
+        assertTrue(hasTool(tools, "list_prism_columns"));
+        assertTrue(hasTool(tools, "describe_prism_session_for_agent"));
+        assertTrue(hasTool(tools, "list_prism_row_sets"));
+        assertTrue(hasTool(tools, "get_prism_row_set_members"));
+        assertTrue(hasTool(tools, "create_prism_row_set_from_subject_set"));
+        assertTrue(hasTool(tools, "create_prism_endpoint_row_set"));
+        assertTrue(hasTool(tools, "combine_prism_row_sets"));
+        assertTrue(hasTool(tools, "get_prism_row_set_structures"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));
         assertTrue(hasTool(tools, "create_decomposition_config"));
         assertTrue(hasTool(tools, "evaluate_decomposition"));
@@ -80,6 +92,87 @@ class McpJsonRpcHandlerTest {
         assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
         assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
+    }
+
+    @Test
+    void canUseSessionBackedPrismRowSetTools() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = prismDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+
+        JsonNode opened = call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        assertEquals("demo", opened.at("/result/structuredContent/sessionId").asText());
+        assertEquals("demo", opened.at("/result/structuredContent/datasetId").asText());
+
+        JsonNode sessions = call(handler, request(2, "list_prism_sessions", "{}"));
+        assertEquals("demo", sessions.at("/result/structuredContent/0/sessionId").asText());
+
+        JsonNode info = call(handler, request(3, "get_prism_session_info", "{\"session_id\":\"demo\"}"));
+        assertEquals(2, info.at("/result/structuredContent/summary/totalRowCount").asInt());
+        assertTrue(info.at("/result/structuredContent/rowSets").size() >= 1);
+
+        JsonNode subjectSet = call(handler, request(4, "create_prism_row_set_from_subject_set", """
+                {"session_id":"demo","subject_set_id":"series:A"}
+                """));
+        assertEquals("series:A", subjectSet.at("/result/structuredContent/rowSetId").asText());
+        assertEquals(2, subjectSet.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode potent = call(handler, request(5, "create_prism_endpoint_row_set", """
+                {"session_id":"demo","endpoint_id":"pIC50","operator":"gte","value":7.0,"row_set_id":"potent"}
+                """));
+        assertEquals("potent", potent.at("/result/structuredContent/rowSetId").asText());
+        assertEquals(1, potent.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode recent = call(handler, request(6, "create_prism_endpoint_row_set", """
+                {"session_id":"demo","endpoint_id":"pIC50","measured_after":"2026-06-01","row_set_id":"recent"}
+                """));
+        assertEquals(1, recent.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode combined = call(handler, request(7, "combine_prism_row_sets", """
+                {"session_id":"demo","operation":"union","row_set_ids":["potent","recent"],"row_set_id":"interesting"}
+                """));
+        assertEquals("interesting", combined.at("/result/structuredContent/rowSetId").asText());
+        assertEquals(2, combined.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode members = call(handler, request(8, "get_prism_row_set_members", """
+                {"session_id":"demo","row_set_id":"interesting","offset":0,"limit":1}
+                """));
+        assertEquals(2, members.at("/result/structuredContent/summary/rowCount").asInt());
+        assertEquals(1, members.at("/result/structuredContent/members").size());
+        assertEquals("CMP-001", members.at("/result/structuredContent/members/0/rowId").asText());
+
+        JsonNode structures = call(handler, request(9, "get_prism_row_set_structures", """
+                {"session_id":"demo","row_set_id":"interesting"}
+                """));
+        assertEquals(2, structures.at("/result/structuredContent/structureCount").asInt());
+        assertEquals("CMP-001", structures.at("/result/structuredContent/structures/0/rowId").asText());
+        assertEquals("c1ccncc1", structures.at("/result/structuredContent/structures/0/smiles").asText());
+    }
+
+    @Test
+    void canOpenMoonshotPrismPackAndInspectSessionThroughToolCalls() throws Exception {
+        Path moonshot = moonshotPrismPack();
+        assumeTrue(Files.isDirectory(moonshot), "Moonshot PrismPack example is not available in the sibling prism checkout.");
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String path = moonshot.toString().replace("\\", "\\\\");
+
+        JsonNode opened = call(handler, request(10, "open_prism_pack",
+                "{\"path\":\"" + path + "\",\"session_id\":\"moonshot\",\"label\":\"Moonshot\"}"));
+        assertEquals("moonshot", opened.at("/result/structuredContent/sessionId").asText());
+        assertTrue(opened.at("/result/structuredContent/totalRowCount").asInt() > 0);
+
+        JsonNode columns = call(handler, request(11, "list_prism_columns", "{\"session_id\":\"moonshot\"}"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("smiles"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("mpro_fluorescence_pIC50"));
+
+        JsonNode description = call(handler, request(12, "describe_prism_session_for_agent", "{\"session_id\":\"moonshot\"}"));
+        assertEquals("moonshot", description.at("/result/structuredContent/summary/sessionId").asText());
+        assertTrue(description.at("/result/structuredContent/structureColumns").size() >= 1);
+        assertTrue(description.at("/result/structuredContent/endpointColumns").size() >= 1);
+
+        JsonNode members = call(handler, request(13, "get_prism_row_set_members", "{\"session_id\":\"moonshot\",\"row_set_id\":\"all\",\"limit\":1}"));
+        assertEquals(1, members.at("/result/structuredContent/members").size());
+        assertTrue(members.at("/result/structuredContent/members/0/fields").toString().contains("prism.column.smiles"));
     }
 
     @Test
@@ -625,6 +718,20 @@ class McpJsonRpcHandlerTest {
     }
 
 
+    private static Path moonshotPrismPack() {
+        Path cwd = Path.of("").toAbsolutePath().normalize();
+        Path[] candidates = {
+                cwd.resolve("../prism/examples/moonshot-medchem.prismpack").normalize(),
+                cwd.resolve("../../prism/examples/moonshot-medchem.prismpack").normalize()
+        };
+        for (Path candidate : candidates) {
+            if (Files.isDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        return candidates[0];
+    }
+
     private Path prismDataset() throws Exception {
         Path dir = tempDir.resolve("prism-tsv");
         Files.createDirectories(dir);
@@ -646,6 +753,17 @@ class McpJsonRpcHandlerTest {
                 "CMP-001\tlogD\tVALUE\t2.5\t1\t2025-01-01T08:00:00Z\t2025-01-03T08:00:00Z",
                 "CMP-002\tpIC50\tVALUE\t6.1\t1\t2026-07-01T08:00:00Z\t2026-07-02T09:00:00Z",
                 "CMP-002\tlogD\tVALUE\t3.1\t1\t2026-07-03T08:00:00Z\t2026-07-04T09:00:00Z",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
+                "subject_set_id\tname\tset_type\tsubject_set_scope\tparent_set_id\tdescription",
+                "series:A\tSeries A\tSERIES\tPROJECT\t\tKinase series A",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_set_memberships.prism.tsv"), String.join("\n",
+                "subject_set_id\tsubject_id",
+                "series:A\tCMP-001",
+                "series:A\tCMP-002",
                 ""
         ));
         return dir;
