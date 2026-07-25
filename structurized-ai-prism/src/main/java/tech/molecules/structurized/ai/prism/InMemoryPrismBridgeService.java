@@ -4,10 +4,25 @@ import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.model.CreateRepositoryRequest;
 import tech.molecules.structurized.ai.model.RegisterStructureRequest;
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
+import tech.molecules.structurized.prism.engine.CategoryIncludeFilter;
+import tech.molecules.structurized.prism.engine.MissingValueFilter;
+import tech.molecules.structurized.prism.engine.MissingValueMode;
+import tech.molecules.structurized.prism.engine.NumericRangeFilter;
 import tech.molecules.structurized.prism.engine.PrismColumn;
+import tech.molecules.structurized.prism.engine.PrismColumnType;
+import tech.molecules.structurized.prism.engine.PrismEvaluationContext;
+import tech.molecules.structurized.prism.engine.PrismFilter;
+import tech.molecules.structurized.prism.engine.PrismGroup;
+import tech.molecules.structurized.prism.engine.PrismGrouping;
+import tech.molecules.structurized.prism.engine.PrismMoleculeDocument;
+import tech.molecules.structurized.prism.engine.PrismMoleculeDocumentMode;
+import tech.molecules.structurized.prism.engine.PrismMoleculeList;
 import tech.molecules.structurized.prism.engine.PrismColumnSchema;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
+import tech.molecules.structurized.prism.engine.TextPatternFilter;
+import tech.molecules.structurized.prism.engine.TextPatternMode;
+import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
 import tech.molecules.structurized.prism.model.CategoryDefinition;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
@@ -28,9 +43,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -42,11 +59,27 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     private static final int PAGE_LIMIT_MAX = 1_000;
 
     private final StructureRepositoryService repositories;
-    private final Map<String, ManagedPrismSession> sessions = new LinkedHashMap<>();
+    private final PrismArtifactRegistry artifactRegistry;
+    private final PrismGroupingClusteringService clustering;
+    private final PrismSessionRegistry sessionRegistry;
+    private final OclMoleculeDocumentCodec moleculeCodec = new OclMoleculeDocumentCodec();
     private final Map<String, MaterializationMapping> materializationsByRepositoryId = new LinkedHashMap<>();
 
     public InMemoryPrismBridgeService(StructureRepositoryService repositories) {
+        this(repositories, new InMemoryPrismSessionRegistry(), new InMemoryPrismArtifactRegistry());
+    }
+
+    public InMemoryPrismBridgeService(StructureRepositoryService repositories, PrismSessionRegistry sessionRegistry) {
+        this(repositories, sessionRegistry, new InMemoryPrismArtifactRegistry());
+    }
+
+    public InMemoryPrismBridgeService(StructureRepositoryService repositories,
+                                      PrismSessionRegistry sessionRegistry,
+                                      PrismArtifactRegistry artifactRegistry) {
         this.repositories = Objects.requireNonNull(repositories, "repositories");
+        this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry");
+        this.artifactRegistry = Objects.requireNonNull(artifactRegistry, "artifactRegistry");
+        this.clustering = new PrismGroupingClusteringService(this.artifactRegistry);
     }
 
     @Override
@@ -59,7 +92,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         String sessionId = normalizeId(request.datasetId() == null || request.datasetId().isBlank()
                 ? generatedSessionId()
                 : request.datasetId(), "datasetId");
-        if (sessions.containsKey(sessionId)) {
+        if (sessionRegistry.find(sessionId).isPresent()) {
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         try {
@@ -67,8 +100,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             PrismSession workspace = PrismSessionImporter.toSession(dataset, sourcePath);
             ensureAllRowSet(workspace);
             String label = request.label() == null || request.label().isBlank() ? sessionId : request.label().trim();
-            ManagedPrismSession managed = new ManagedPrismSession(sessionId, label, sourcePath, dataset, workspace, Instant.now());
-            sessions.put(sessionId, managed);
+            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, dataset, workspace);
             return datasetSummary(managed);
         } catch (IOException | RuntimeException e) {
             throw new ChemOperationException("invalid_prism_dataset", "Could not load Prism dataset from " + sourcePath + ".", e);
@@ -85,15 +117,14 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         String sessionId = normalizeId(request.sessionId() == null || request.sessionId().isBlank()
                 ? generatedSessionId()
                 : request.sessionId(), "sessionId");
-        if (sessions.containsKey(sessionId)) {
+        if (sessionRegistry.find(sessionId).isPresent()) {
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         try {
             PrismSession workspace = PrismSession.open(sourcePath);
             ensureAllRowSet(workspace);
             String label = request.label() == null || request.label().isBlank() ? sourcePath.getFileName().toString() : request.label().trim();
-            ManagedPrismSession managed = new ManagedPrismSession(sessionId, label, sourcePath, null, workspace, Instant.now());
-            sessions.put(sessionId, managed);
+            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, null, workspace);
             return sessionSummary(managed);
         } catch (IOException | RuntimeException e) {
             throw new ChemOperationException("invalid_prism_pack", "Could not open PrismPack from " + sourcePath + ".", e);
@@ -102,12 +133,12 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     @Override
     public synchronized List<PrismDatasetSummary> listDatasets() {
-        return sessions.values().stream().map(this::datasetSummary).toList();
+        return sessionRegistry.sessions().stream().map(this::datasetSummary).toList();
     }
 
     @Override
     public synchronized List<PrismSessionSummary> listSessions() {
-        return sessions.values().stream().map(this::sessionSummary).toList();
+        return sessionRegistry.sessions().stream().map(this::sessionSummary).toList();
     }
 
     @Override
@@ -147,8 +178,156 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     }
 
     @Override
+    public synchronized List<PrismMoleculeListSummary> listMoleculeLists(String sessionId) {
+        ManagedPrismSession session = session(sessionId);
+        return session.moleculeWorkspace().lists().stream()
+                .map(list -> moleculeListSummary(session, list))
+                .toList();
+    }
+
+    @Override
+    public synchronized PrismMoleculeListView getMoleculeList(String sessionId, String listId) {
+        ManagedPrismSession session = session(sessionId);
+        PrismMoleculeList list = session.moleculeWorkspace().findList(normalizeId(listId, "listId"))
+                .orElseThrow(() -> new ChemOperationException(
+                        "prism_molecule_list_not_found",
+                        "Molecule list " + listId + " does not exist in Prism session " + session.sessionId() + "."
+                ));
+        return moleculeListView(session, list);
+    }
+
+    @Override
+    public synchronized PrismMoleculeListSummary createMoleculeList(CreatePrismMoleculeListRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        try {
+            PrismMoleculeList list = session.callAs(
+                    ManagedPrismSessionChangeOrigin.MCP,
+                    () -> session.moleculeWorkspace().createList(request.listId(), request.title())
+            );
+            return moleculeListSummary(session, list);
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException("invalid_prism_molecule_list", exception.getMessage(), exception);
+        }
+    }
+
+    @Override
+    public synchronized PrismMoleculeListView addMolecules(AddPrismMoleculesRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (request.molecules().isEmpty()) {
+            throw new ChemOperationException("invalid_prism_molecules", "At least one molecule is required.");
+        }
+        if (request.molecules().size() > 500) {
+            throw new ChemOperationException("invalid_prism_molecules", "A single request may add at most 500 molecules.");
+        }
+        ManagedPrismSession session = session(request.sessionId());
+        String listId = normalizeId(request.listId(), "listId");
+        if (session.moleculeWorkspace().findList(listId).isEmpty()) {
+            throw new ChemOperationException(
+                    "prism_molecule_list_not_found",
+                    "Molecule list " + listId + " does not exist in Prism session " + session.sessionId() + "."
+            );
+        }
+        List<PreparedMolecule> prepared;
+        try {
+            prepared = request.molecules().stream().map(input -> {
+                PrismMoleculeDocumentMode mode = moleculeMode(input.mode());
+                OclMoleculeDocumentCodec.EncodedMolecule encoded = moleculeCodec.parse(input.structure(), mode);
+                return new PreparedMolecule(input.title(), mode, encoded);
+            }).toList();
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException("invalid_prism_molecule", exception.getMessage(), exception);
+        }
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> {
+            for (PreparedMolecule molecule : prepared) {
+                session.moleculeWorkspace().addDocument(
+                        listId, null, molecule.title(), molecule.mode(),
+                        molecule.encoded().idcode(), molecule.encoded().coordinates()
+                );
+            }
+        });
+        return getMoleculeList(session.sessionId(), listId);
+    }
+
+    @Override
     public synchronized List<PrismRowSetSummary> listRowSets(String sessionId) {
         return rowSetSummaries(session(sessionId));
+    }
+
+    @Override
+    public synchronized List<PrismGroupingSummary> listGroupings(String sessionId) {
+        ManagedPrismSession session = session(sessionId);
+        return session.workspace().groupings().stream()
+                .map(grouping -> groupingSummary(session, grouping))
+                .toList();
+    }
+
+    @Override
+    public synchronized PrismGroupingView getGrouping(String sessionId,
+                                                       String groupingId,
+                                                       int offset,
+                                                       int limit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismGrouping grouping = grouping(session, groupingId);
+        int safeOffset = Math.min(Math.max(0, offset), grouping.groups().size());
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? PAGE_LIMIT_DEFAULT : limit));
+        int to = Math.min(safeOffset + safeLimit, grouping.groups().size());
+        List<PrismGroupSummary> groups = grouping.groups().subList(safeOffset, to).stream()
+                .map(group -> new PrismGroupSummary(
+                        group.id(),
+                        group.label(),
+                        group.description(),
+                        group.parentGroupId(),
+                        group.representativeRowId(),
+                        grouping.rowsInGroup(group.id()).size(),
+                        group.metadata()
+                ))
+                .toList();
+        return new PrismGroupingView(
+                groupingSummary(session, grouping),
+                grouping.groups().size(),
+                safeOffset,
+                safeLimit,
+                groups
+        );
+    }
+
+    @Override
+    public synchronized PrismRowSetSummary createGroupRowSet(CreatePrismGroupRowSetRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        PrismGrouping grouping = grouping(session, request.groupingId());
+        String groupId = normalizeId(request.groupId(), "groupId");
+        PrismGroup group;
+        try {
+            group = grouping.group(groupId);
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException(
+                    "prism_group_not_found",
+                    "Prism group " + groupId + " does not exist in grouping " + grouping.id() + ".",
+                    exception
+            );
+        }
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? generatedRowSetId(session, grouping.id() + "_" + group.id())
+                : request.rowSetId().trim();
+        PrismRowSet rowSet = new PrismRowSet(
+                rowSetId,
+                request.name() == null || request.name().isBlank()
+                        ? grouping.title() + " / " + group.label()
+                        : request.name().trim(),
+                request.description() == null || request.description().isBlank()
+                        ? "Rows in " + group.label() + " from Prism grouping " + grouping.id() + "."
+                        : request.description().trim(),
+                grouping.rowsInGroup(group.id()),
+                Map.of(
+                        "source", "prism_grouping",
+                        "groupingId", grouping.id(),
+                        "groupId", group.id()
+                )
+        );
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
+        return rowSetSummary(session, rowSet);
     }
 
     @Override
@@ -189,8 +368,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 rowIds,
                 Map.of("source", "prism_subject_set", "subjectSetId", subjectSetId)
         );
-        session.workspace().addRowSet(rowSet);
-        session.bumpRevision();
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
         return rowSetSummary(session, rowSet);
     }
 
@@ -245,9 +423,69 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 rowIds,
                 Map.of("source", "endpoint_filter", "endpointId", endpointId)
         );
-        session.workspace().addRowSet(rowSet);
-        session.bumpRevision();
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
         return rowSetSummary(session, rowSet);
+    }
+
+    @Override
+    public synchronized PrismRowSetSummary createColumnRowSet(CreatePrismColumnRowSetRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String columnId = normalizeId(request.columnId(), "columnId");
+        PrismColumn column = session.workspace().table().findColumn(columnId)
+                .orElseThrow(() -> new ChemOperationException(
+                        "prism_column_not_found",
+                        "Prism column " + columnId + " does not exist."
+                ));
+        PrismFilter filter = columnFilter(request, column);
+        BitSet matches;
+        try {
+            matches = filter.evaluate(
+                    session.workspace().table(),
+                    new PrismEvaluationContext(session.workspace().viewState())
+            );
+        } catch (RuntimeException exception) {
+            throw new ChemOperationException(
+                    "invalid_prism_column_filter",
+                    "Could not evaluate filter for Prism column " + columnId + ": " + exception.getMessage(),
+                    exception
+            );
+        }
+
+        String baseRowSetId = request.baseRowSetId() == null || request.baseRowSetId().isBlank()
+                ? "all"
+                : request.baseRowSetId().trim();
+        PrismRowSet baseRowSet = rowSet(session, baseRowSetId);
+        LinkedHashSet<String> rowIds = new LinkedHashSet<>();
+        for (int physicalRow = matches.nextSetBit(0);
+             physicalRow >= 0;
+             physicalRow = matches.nextSetBit(physicalRow + 1)) {
+            String rowId = session.workspace().rowIdForPhysicalRow(physicalRow);
+            if (baseRowSet.rowIds().contains(rowId)) {
+                rowIds.add(rowId);
+            }
+        }
+
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? generatedRowSetId(session, "column_filter")
+                : request.rowSetId().trim();
+        String sourceText = columnFilterSourceText(request, columnId);
+        PrismRowSet created = new PrismRowSet(
+                rowSetId,
+                request.name() == null || request.name().isBlank() ? sourceText : request.name().trim(),
+                request.description() == null || request.description().isBlank()
+                        ? "Rows from " + baseRowSetId + " matching " + sourceText + "."
+                        : request.description().trim(),
+                rowIds,
+                Map.of(
+                        "source", "prism_column_filter",
+                        "baseRowSetId", baseRowSetId,
+                        "columnId", columnId,
+                        "filterType", normalizeColumnFilterType(request.filterType())
+                )
+        );
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(created));
+        return rowSetSummary(session, created);
     }
 
     @Override
@@ -288,8 +526,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 combined,
                 Map.of("source", "row_set_" + operation, "rowSetIds", request.rowSetIds())
         );
-        session.workspace().addRowSet(rowSet);
-        session.bumpRevision();
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
         return rowSetSummary(session, rowSet);
     }
 
@@ -323,6 +560,52 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 skipped,
                 structures
         );
+    }
+
+    @Override
+    public synchronized PrismClusteringSummary clusterRowSet(ClusterPrismRowSetRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? "all"
+                : request.rowSetId().trim();
+        PrismRowSet sourceRowSet = rowSet(session, rowSetId);
+        PrismRowSetStructureCollection structures = rowSetStructures(session.sessionId(), sourceRowSet.id());
+        return clustering.cluster(session, sourceRowSet, structures, request);
+    }
+
+    @Override
+    public synchronized List<PrismAnalysisSummary> listAnalyses(String sessionId) {
+        ManagedPrismSession session = session(sessionId);
+        return artifactRegistry.summaries(session.sessionId());
+    }
+
+    @Override
+    public synchronized PrismClusteringView getClustering(String sessionId,
+                                                          String analysisId,
+                                                          boolean includeSingletons,
+                                                          int offset,
+                                                          int limit) {
+        return clustering.getClustering(session(sessionId), analysisId, includeSingletons, offset, limit);
+    }
+
+    @Override
+    public synchronized PrismClusterMembersView getClusterMembers(String sessionId,
+                                                                  String analysisId,
+                                                                  String clusterId,
+                                                                  int offset,
+                                                                  int limit) {
+        return clustering.getClusterMembers(session(sessionId), analysisId, clusterId, offset, limit);
+    }
+
+    @Override
+    public synchronized PrismRowSetSummary createClusterRowSet(CreatePrismClusterRowSetRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? generatedRowSetId(session, request.analysisId() + "_" + request.clusterId())
+                : request.rowSetId().trim();
+        return clustering.createClusterRowSet(session, request, rowSetId);
     }
 
     @Override
@@ -599,13 +882,70 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         );
     }
 
+    private PrismGroupingSummary groupingSummary(ManagedPrismSession session, PrismGrouping grouping) {
+        return new PrismGroupingSummary(
+                session.sessionId(),
+                grouping.id(),
+                grouping.title(),
+                grouping.description(),
+                grouping.mode().name(),
+                grouping.sourceRowSetId(),
+                grouping.facetColumnId(),
+                grouping.groups().size(),
+                grouping.memberships().size(),
+                grouping.provenance()
+        );
+    }
+
+    private PrismMoleculeListSummary moleculeListSummary(ManagedPrismSession session, PrismMoleculeList list) {
+        return new PrismMoleculeListSummary(
+                session.sessionId(),
+                list.id(),
+                list.title(),
+                list.documents().size()
+        );
+    }
+
+    private PrismMoleculeListView moleculeListView(ManagedPrismSession session, PrismMoleculeList list) {
+        List<PrismMoleculeDocumentSummary> documents = list.documents().stream()
+                .map(this::moleculeDocumentSummary)
+                .toList();
+        return new PrismMoleculeListView(
+                moleculeListSummary(session, list),
+                session.moleculeWorkspace().revision(),
+                documents
+        );
+    }
+
+    private PrismMoleculeDocumentSummary moleculeDocumentSummary(PrismMoleculeDocument document) {
+        return new PrismMoleculeDocumentSummary(
+                document.id(),
+                document.title(),
+                document.mode().name().toLowerCase(Locale.ROOT),
+                moleculeCodec.interchange(document),
+                document.revision()
+        );
+    }
+
+    private static PrismMoleculeDocumentMode moleculeMode(String value) {
+        String normalized = value == null || value.isBlank() ? "molecule" : value.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "molecule" -> PrismMoleculeDocumentMode.MOLECULE;
+            case "fragment" -> PrismMoleculeDocumentMode.FRAGMENT;
+            default -> throw new IllegalArgumentException("molecule mode must be molecule or fragment");
+        };
+    }
+
     private PrismRowMember rowMember(ManagedPrismSession session, String rowId) {
         int physicalRow = session.workspace().physicalRowForRowId(rowId)
                 .orElseThrow(() -> new ChemOperationException("prism_row_not_found", "Prism row " + rowId + " does not exist."));
         SubjectRecord subject = session.dataContext()
                 .flatMap(dataContext -> dataContext.findSubjectRecord(rowId))
                 .orElse(null);
-        Map<String, String> fields = subject == null ? rowFields(session, physicalRow) : subjectFields(session, null, subject);
+        LinkedHashMap<String, String> fields = new LinkedHashMap<>(rowFields(session, physicalRow));
+        if (subject != null) {
+            fields.putAll(subjectFields(session, null, subject));
+        }
         return new PrismRowMember(
                 rowId,
                 physicalRow,
@@ -713,12 +1053,15 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         }
     }
 
+    private record PreparedMolecule(
+            String title,
+            PrismMoleculeDocumentMode mode,
+            OclMoleculeDocumentCodec.EncodedMolecule encoded
+    ) {
+    }
+
     private ManagedPrismSession session(String sessionId) {
-        ManagedPrismSession session = sessions.get(normalizeId(sessionId, "sessionId"));
-        if (session == null) {
-            throw new ChemOperationException("prism_session_not_found", "Prism session " + sessionId + " does not exist.");
-        }
-        return session;
+        return sessionRegistry.require(normalizeId(sessionId, "sessionId"));
     }
 
     private InMemoryPrismDataset dataContext(ManagedPrismSession session) {
@@ -743,6 +1086,19 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         ));
     }
 
+    private PrismGrouping grouping(ManagedPrismSession session, String groupingId) {
+        String id = normalizeId(groupingId, "groupingId");
+        try {
+            return session.workspace().grouping(id);
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException(
+                    "prism_grouping_not_found",
+                    "Prism grouping " + id + " does not exist.",
+                    exception
+            );
+        }
+    }
+
     private PrismRowSet rowSet(ManagedPrismSession session, String rowSetId) {
         String id = normalizeId(rowSetId, "rowSetId");
         try {
@@ -753,8 +1109,8 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     }
 
     private String generatedSessionId() {
-        int index = sessions.size() + 1;
-        while (sessions.containsKey("prism" + index)) {
+        int index = sessionRegistry.sessions().size() + 1;
+        while (sessionRegistry.find("prism" + index).isPresent()) {
             index++;
         }
         return "prism" + index;
@@ -811,6 +1167,107 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return value.trim();
     }
 
+    private static PrismFilter columnFilter(CreatePrismColumnRowSetRequest request, PrismColumn column) {
+        String type = normalizeColumnFilterType(request.filterType());
+        boolean includeMissing = Boolean.TRUE.equals(request.includeMissing());
+        return switch (type) {
+            case "numeric_range" -> {
+                if (column.type() != PrismColumnType.NUMERIC && column.type() != PrismColumnType.INTEGER) {
+                    throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "numeric_range requires a numeric Prism column, but " + column.id() + " is " + column.type() + "."
+                    );
+                }
+                if (request.minimum() == null && request.maximum() == null) {
+                    throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "numeric_range requires minimum and/or maximum."
+                    );
+                }
+                if (request.minimum() != null && request.maximum() != null
+                        && request.minimum() > request.maximum()) {
+                    throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "numeric_range minimum must not exceed maximum."
+                    );
+                }
+                yield new NumericRangeFilter(column.id(), request.minimum(), request.maximum(), includeMissing);
+            }
+            case "category_include" -> {
+                if (request.values().isEmpty()) {
+                    throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "category_include requires at least one value."
+                    );
+                }
+                yield new CategoryIncludeFilter(column.id(), Set.copyOf(request.values()), includeMissing);
+            }
+            case "text_pattern" -> {
+                if (request.pattern() == null || request.pattern().isBlank()) {
+                    throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "text_pattern requires a non-blank pattern."
+                    );
+                }
+                String mode = request.textMode() == null || request.textMode().isBlank()
+                        ? "substring"
+                        : request.textMode().trim().toLowerCase(Locale.ROOT);
+                TextPatternMode patternMode = switch (mode) {
+                    case "substring", "contains" -> TextPatternMode.SUBSTRING;
+                    case "regex" -> TextPatternMode.REGEX;
+                    default -> throw new ChemOperationException(
+                            "invalid_prism_column_filter",
+                            "text_mode must be substring or regex."
+                    );
+                };
+                boolean caseInsensitive = request.caseInsensitive() == null || request.caseInsensitive();
+                yield new TextPatternFilter(
+                        column.id(),
+                        request.pattern(),
+                        patternMode,
+                        caseInsensitive,
+                        includeMissing
+                );
+            }
+            case "missing" -> new MissingValueFilter(column.id(), MissingValueMode.MISSING);
+            case "has_value" -> new MissingValueFilter(column.id(), MissingValueMode.HAS_VALUE);
+            default -> throw new IllegalStateException("Unsupported Prism column filter type: " + type);
+        };
+    }
+
+    private static String normalizeColumnFilterType(String filterType) {
+        if (filterType == null || filterType.isBlank()) {
+            throw new ChemOperationException(
+                    "invalid_prism_column_filter",
+                    "filterType must be numeric_range, category_include, text_pattern, missing, or has_value."
+            );
+        }
+        String normalized = filterType.trim().toLowerCase(Locale.ROOT);
+        if (!List.of("numeric_range", "category_include", "text_pattern", "missing", "has_value").contains(normalized)) {
+            throw new ChemOperationException(
+                    "invalid_prism_column_filter",
+                    "filterType must be numeric_range, category_include, text_pattern, missing, or has_value."
+            );
+        }
+        return normalized;
+    }
+
+    private static String columnFilterSourceText(CreatePrismColumnRowSetRequest request, String columnId) {
+        return switch (normalizeColumnFilterType(request.filterType())) {
+            case "numeric_range" -> columnId + " in ["
+                    + (request.minimum() == null ? "-inf" : request.minimum())
+                    + ", "
+                    + (request.maximum() == null ? "+inf" : request.maximum())
+                    + "]";
+            case "category_include" -> columnId + " in " + request.values();
+            case "text_pattern" -> columnId + " "
+                    + (request.textMode() == null || request.textMode().isBlank() ? "contains" : request.textMode())
+                    + " " + request.pattern();
+            case "missing" -> columnId + " is missing";
+            case "has_value" -> columnId + " has a value";
+            default -> throw new IllegalStateException();
+        };
+    }
     private static String normalizeRowSetOperation(String operation) {
         if (operation == null || operation.isBlank()) {
             throw new ChemOperationException("invalid_row_set_operation", "operation must be union, merge, intersect, or subtract.");

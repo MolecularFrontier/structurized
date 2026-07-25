@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import tech.molecules.structurized.ai.model.ChemOperationException;
+import tech.molecules.structurized.ai.prism.PrismBridgeService;
+import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -32,6 +34,11 @@ public final class McpJsonRpcHandler {
     public static McpJsonRpcHandler createDefault() {
         ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
         return new McpJsonRpcHandler(mapper, McpChemistryTools.createDefault(mapper));
+    }
+
+    public static McpJsonRpcHandler create(StructureRepositoryService repositories, PrismBridgeService prism) {
+        ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        return new McpJsonRpcHandler(mapper, McpChemistryTools.create(mapper, repositories, prism));
     }
 
     public String handleJson(String json) throws Exception {
@@ -110,7 +117,7 @@ public final class McpJsonRpcHandler {
         capabilities.put("tools", Map.of());
         Map<String, Object> serverInfo = new LinkedHashMap<>();
         serverInfo.put("name", "structurized-ai-mcp");
-        serverInfo.put("version", "0.2.1");
+        serverInfo.put("version", "0.2.3");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("protocolVersion", PROTOCOL_VERSION);
         result.put("capabilities", capabilities);

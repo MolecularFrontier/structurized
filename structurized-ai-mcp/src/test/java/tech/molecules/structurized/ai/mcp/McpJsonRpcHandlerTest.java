@@ -30,7 +30,7 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
-        assertEquals("0.2.1", response.at("/result/serverInfo/version").asText());
+        assertEquals("0.2.3", response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
     }
 
@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(60, tools.size());
+        assertEquals(73, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -64,12 +64,25 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_prism_session_info"));
         assertTrue(hasTool(tools, "list_prism_columns"));
         assertTrue(hasTool(tools, "describe_prism_session_for_agent"));
+        assertTrue(hasTool(tools, "list_prism_molecule_lists"));
+        assertTrue(hasTool(tools, "get_prism_molecule_list"));
+        assertTrue(hasTool(tools, "create_prism_molecule_list"));
+        assertTrue(hasTool(tools, "add_prism_molecules"));
         assertTrue(hasTool(tools, "list_prism_row_sets"));
         assertTrue(hasTool(tools, "get_prism_row_set_members"));
         assertTrue(hasTool(tools, "create_prism_row_set_from_subject_set"));
         assertTrue(hasTool(tools, "create_prism_endpoint_row_set"));
+        assertTrue(hasTool(tools, "create_prism_column_row_set"));
         assertTrue(hasTool(tools, "combine_prism_row_sets"));
         assertTrue(hasTool(tools, "get_prism_row_set_structures"));
+        assertTrue(hasTool(tools, "cluster_prism_row_set"));
+        assertTrue(hasTool(tools, "list_prism_analyses"));
+        assertTrue(hasTool(tools, "get_prism_clustering"));
+        assertTrue(hasTool(tools, "get_prism_cluster_members"));
+        assertTrue(hasTool(tools, "create_prism_cluster_row_set"));
+        assertTrue(hasTool(tools, "list_prism_groupings"));
+        assertTrue(hasTool(tools, "get_prism_grouping"));
+        assertTrue(hasTool(tools, "create_prism_group_row_set"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));
         assertTrue(hasTool(tools, "create_decomposition_config"));
         assertTrue(hasTool(tools, "evaluate_decomposition"));
@@ -92,6 +105,38 @@ class McpJsonRpcHandlerTest {
         assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
         assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
+    }
+
+    @Test
+    void agentCanCreateAndPopulatePrismMoleculeLists() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String path = prismDataset().toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"molecules\"}"));
+
+        JsonNode created = call(handler, request(2, "create_prism_molecule_list", """
+                {"session_id":"molecules","list_id":"ideas","title":"Proposed analogues"}
+                """));
+        assertEquals("ideas", created.at("/result/structuredContent/listId").asText());
+
+        JsonNode added = call(handler, request(3, "add_prism_molecules", """
+                {
+                  "session_id":"molecules",
+                  "list_id":"ideas",
+                  "molecules":[
+                    {"title":"Candidate","structure":"CCN"},
+                    {"title":"Query","mode":"fragment","structure":"[c,n]1ccccc1[*]"}
+                  ]
+                }
+                """));
+        assertEquals(2, added.at("/result/structuredContent/documents").size());
+        assertEquals("molecule", added.at("/result/structuredContent/documents/0/mode").asText());
+        assertEquals("fragment", added.at("/result/structuredContent/documents/1/mode").asText());
+
+        JsonNode listed = call(handler, request(4, "list_prism_molecule_lists", """
+                {"session_id":"molecules"}
+                """));
+        assertEquals(2, listed.at("/result/structuredContent").size());
+        assertEquals("ideas", listed.at("/result/structuredContent/1/listId").asText());
     }
 
     @Test
@@ -149,6 +194,95 @@ class McpJsonRpcHandlerTest {
         assertEquals("c1ccncc1", structures.at("/result/structuredContent/structures/0/smiles").asText());
     }
 
+    @Test
+    void canFilterAndClusterManagedPrismRowsThroughToolCalls() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = prismDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+
+        call(handler, request(20, "open_prism_dataset",
+                "{\"path\":\"" + path + "\",\"dataset_id\":\"analysis_demo\"}"));
+
+        JsonNode scope = call(handler, request(21, "create_prism_column_row_set", """
+                {
+                  "session_id":"analysis_demo",
+                  "column_id":"pIC50",
+                  "filter_type":"numeric_range",
+                  "minimum":6.0,
+                  "row_set_id":"measured"
+                }
+                """));
+        assertEquals(2, scope.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode clustered = call(handler, request(22, "cluster_prism_row_set", """
+                {
+                  "session_id":"analysis_demo",
+                  "row_set_id":"measured",
+                  "analysis_id":"rough",
+                  "threshold":1.0
+                }
+                """));
+        assertEquals("rough", clustered.at("/result/structuredContent/analysis/analysisId").asText(), clustered.toPrettyString());
+        assertEquals(2, clustered.at("/result/structuredContent/clusterCount").asInt());
+        assertEquals(3, clustered.at("/result/structuredContent/analysis/resultRevision").asInt());
+
+        JsonNode analyses = call(handler, request(23, "list_prism_analyses",
+                "{\"session_id\":\"analysis_demo\"}"));
+        assertEquals("rough", analyses.at("/result/structuredContent/0/analysisId").asText());
+
+        JsonNode groupings = call(handler, request(29, "list_prism_groupings",
+                "{\"session_id\":\"analysis_demo\"}"));
+        assertEquals("rough", groupings.at("/result/structuredContent/0/groupingId").asText());
+        assertEquals("rough.cluster_id", groupings.at("/result/structuredContent/0/facetColumnId").asText());
+
+        JsonNode grouping = call(handler, request(30, "get_prism_grouping", """
+                {"session_id":"analysis_demo","grouping_id":"rough"}
+                """));
+        assertEquals(2, grouping.at("/result/structuredContent/totalGroups").asInt());
+        assertEquals("cluster_1", grouping.at("/result/structuredContent/groups/0/groupId").asText());
+
+        JsonNode genericGroupSet = call(handler, request(31, "create_prism_group_row_set", """
+                {
+                  "session_id":"analysis_demo",
+                  "grouping_id":"rough",
+                  "group_id":"cluster_1",
+                  "row_set_id":"generic_cluster_one"
+                }
+                """));
+        assertEquals(1, genericGroupSet.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode columns = call(handler, request(24, "list_prism_columns",
+                "{\"session_id\":\"analysis_demo\"}"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("rough.cluster_id"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("rough.similarity_to_representative"));
+
+        JsonNode clustering = call(handler, request(25, "get_prism_clustering", """
+                {"session_id":"analysis_demo","analysis_id":"rough","include_singletons":true}
+                """));
+        assertEquals(2, clustering.at("/result/structuredContent/totalClusters").asInt());
+        assertEquals("cluster_1", clustering.at("/result/structuredContent/clusters/0/clusterId").asText());
+
+        JsonNode members = call(handler, request(26, "get_prism_cluster_members", """
+                {"session_id":"analysis_demo","analysis_id":"rough","cluster_id":"cluster_1"}
+                """));
+        assertEquals("CMP-001", members.at("/result/structuredContent/members/0/rowId").asText());
+
+        JsonNode rowSet = call(handler, request(27, "create_prism_cluster_row_set", """
+                {
+                  "session_id":"analysis_demo",
+                  "analysis_id":"rough",
+                  "cluster_id":"cluster_1",
+                  "row_set_id":"cluster_one"
+                }
+                """));
+        assertEquals(1, rowSet.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode published = call(handler, request(28, "get_prism_row_set_members", """
+                {"session_id":"analysis_demo","row_set_id":"cluster_one"}
+                """));
+        assertEquals("cluster_1",
+                published.at("/result/structuredContent/members/0/fields/prism.column.rough.cluster_id").asText());
+    }
     @Test
     void canOpenMoonshotPrismPackAndInspectSessionThroughToolCalls() throws Exception {
         Path moonshot = moonshotPrismPack();
@@ -595,7 +729,6 @@ class McpJsonRpcHandlerTest {
         assertTrue(artifacts.at("/result/structuredContent").size() >= 1);
     }
 
-
     @Test
     void canOpenPrismMaterializeSearchAndFetchEndpointValues() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
@@ -679,7 +812,6 @@ class McpJsonRpcHandlerTest {
         assertEquals("pIC50", mapper.readTree(clusterStatsArtifact.toFile()).at("/clusters/0/endpoint/endpointId").asText());
     }
 
-
     @Test
     void unsafeArtifactOutputNameReturnsToolError() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
@@ -716,7 +848,6 @@ class McpJsonRpcHandlerTest {
         assertEquals(-32601, response.at("/error/code").asInt());
         assertEquals("method_not_found", response.at("/error/data/code").asText());
     }
-
 
     private static Path moonshotPrismPack() {
         Path cwd = Path.of("").toAbsolutePath().normalize();

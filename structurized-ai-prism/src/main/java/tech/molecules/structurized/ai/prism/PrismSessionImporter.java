@@ -142,7 +142,7 @@ final class PrismSessionImporter {
 
     private static String type(EndpointDataType datatype) {
         return switch (datatype) {
-            case NUMERIC, OPTIONAL_NUMERIC -> "numeric";
+            case NUMERIC, OPTIONAL_NUMERIC -> "number";
             case BOOLEAN -> "boolean";
             case CATEGORICAL, TEXT -> "text";
         };

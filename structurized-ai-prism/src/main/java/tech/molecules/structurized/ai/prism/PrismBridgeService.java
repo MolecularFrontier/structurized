@@ -17,7 +17,21 @@ public interface PrismBridgeService {
 
     PrismSessionAgentDescription describeSessionForAgent(String sessionId);
 
+    List<PrismMoleculeListSummary> listMoleculeLists(String sessionId);
+
+    PrismMoleculeListView getMoleculeList(String sessionId, String listId);
+
+    PrismMoleculeListSummary createMoleculeList(CreatePrismMoleculeListRequest request);
+
+    PrismMoleculeListView addMolecules(AddPrismMoleculesRequest request);
+
     List<PrismRowSetSummary> listRowSets(String sessionId);
+
+    List<PrismGroupingSummary> listGroupings(String sessionId);
+
+    PrismGroupingView getGrouping(String sessionId, String groupingId, int offset, int limit);
+
+    PrismRowSetSummary createGroupRowSet(CreatePrismGroupRowSetRequest request);
 
     PrismRowSetMembersView getRowSetMembers(String sessionId, String rowSetId, int offset, int limit);
 
@@ -25,9 +39,21 @@ public interface PrismBridgeService {
 
     PrismRowSetSummary createEndpointRowSet(CreatePrismEndpointRowSetRequest request);
 
+    PrismRowSetSummary createColumnRowSet(CreatePrismColumnRowSetRequest request);
+
     PrismRowSetSummary combineRowSets(CombinePrismRowSetsRequest request);
 
     PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId);
+
+    PrismClusteringSummary clusterRowSet(ClusterPrismRowSetRequest request);
+
+    List<PrismAnalysisSummary> listAnalyses(String sessionId);
+
+    PrismClusteringView getClustering(String sessionId, String analysisId, boolean includeSingletons, int offset, int limit);
+
+    PrismClusterMembersView getClusterMembers(String sessionId, String analysisId, String clusterId, int offset, int limit);
+
+    PrismRowSetSummary createClusterRowSet(CreatePrismClusterRowSetRequest request);
 
     PrismDatasetInfo getDatasetInfo(String datasetId);
 

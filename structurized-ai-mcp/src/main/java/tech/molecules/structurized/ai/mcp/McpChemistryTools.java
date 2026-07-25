@@ -25,6 +25,12 @@ import tech.molecules.structurized.ai.model.SubstructureSearchMatch;
 import tech.molecules.structurized.ai.model.SubstructureSearchResult;
 import tech.molecules.structurized.ai.model.StructureRef;
 import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
+import tech.molecules.structurized.ai.prism.ClusterPrismRowSetRequest;
+import tech.molecules.structurized.ai.prism.AddPrismMoleculesRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismMoleculeListRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismClusterRowSetRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismGroupRowSetRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismColumnRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismEndpointRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.CombinePrismRowSetsRequest;
@@ -33,6 +39,7 @@ import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismPackRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
+import tech.molecules.structurized.ai.prism.PrismMoleculeInput;
 import tech.molecules.structurized.ai.render.CompactStructureRenderer;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
@@ -69,12 +76,12 @@ final class McpChemistryTools {
     private final Map<String, ToolHandler> handlers = new LinkedHashMap<>();
     private final List<McpToolDefinition> tools;
 
-    private McpChemistryTools(ObjectMapper mapper, StructureRepositoryService repositories) {
+    private McpChemistryTools(ObjectMapper mapper, StructureRepositoryService repositories, PrismBridgeService prism) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.repositories = Objects.requireNonNull(repositories, "repositories");
         this.inspections = new OclStructureInspectionService(repositories);
         this.searches = new OclStructureSearchService(repositories);
-        this.prism = new InMemoryPrismBridgeService(repositories);
+        this.prism = Objects.requireNonNull(prism, "prism");
         this.artifacts = new McpArtifactService(mapper);
         this.selections = new SelectionAiService(repositories);
         this.clusterings = new SimilarityClusteringAiService(repositories);
@@ -83,7 +90,14 @@ final class McpChemistryTools {
     }
 
     static McpChemistryTools createDefault(ObjectMapper mapper) {
-        return new McpChemistryTools(mapper, new InMemoryStructureRepositoryService());
+        StructureRepositoryService repositories = new InMemoryStructureRepositoryService();
+        return new McpChemistryTools(mapper, repositories, new InMemoryPrismBridgeService(repositories));
+    }
+
+    static McpChemistryTools create(ObjectMapper mapper,
+                                    StructureRepositoryService repositories,
+                                    PrismBridgeService prism) {
+        return new McpChemistryTools(mapper, repositories, prism);
     }
 
     List<McpToolDefinition> tools() {
@@ -245,6 +259,35 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
                 args -> prism.describeSessionForAgent(requiredString(args, "session_id")));
+        add(result, "list_prism_molecule_lists", "Lists lightweight ordered molecule-document lists in one managed Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listMoleculeLists(requiredString(args, "session_id")));
+        add(result, "get_prism_molecule_list", "Returns one ordered molecule list as normalized SMILES and SMARTS documents.", schema(
+                required("session_id", "list_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("list_id", "string", "Molecule list ID.")),
+                args -> prism.getMoleculeList(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "list_id")));
+        add(result, "create_prism_molecule_list", "Creates an empty ordered molecule list for sketches or proposed compounds.", schema(
+                required("session_id", "title"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("list_id", "string", "Optional molecule list ID."),
+                prop("title", "string", "Human-readable list title.")),
+                args -> prism.createMoleculeList(new CreatePrismMoleculeListRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "list_id", null),
+                        requiredString(args, "title"))));
+        add(result, "add_prism_molecules", "Adds an ordered batch of new molecule or fragment documents to a session molecule list. Molecules use SMILES; fragments use SMARTS.", schema(
+                required("session_id", "list_id", "molecules"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("list_id", "string", "Target molecule list ID."),
+                moleculeArrayProp()),
+                args -> prism.addMolecules(new AddPrismMoleculesRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "list_id"),
+                        moleculeInputs(args))));
         add(result, "list_prism_row_sets", "Lists Prism row sets for a managed session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
@@ -296,6 +339,37 @@ final class McpChemistryTools {
                         optionalString(args, "measured_after", null),
                         optionalString(args, "measured_before", null),
                         optionalNullableBoolean(args, "require_measured_date"))));
+        add(result, "create_prism_column_row_set", "Creates a Prism row set by evaluating an existing runtime column without changing applied table filters.", schema(
+                required("session_id", "column_id", "filter_type"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("base_row_set_id", "string", "Optional source row set. Defaults to all."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description."),
+                prop("column_id", "string", "Runtime Prism column ID."),
+                prop("filter_type", "string", "numeric_range, category_include, text_pattern, missing, or has_value."),
+                prop("minimum", "number", "Inclusive numeric lower bound."),
+                prop("maximum", "number", "Inclusive numeric upper bound."),
+                arrayProp("values", "string", "Included formatted values for category_include."),
+                prop("pattern", "string", "Substring or regular expression for text_pattern."),
+                prop("text_mode", "string", "substring or regex. Defaults to substring."),
+                prop("case_insensitive", "boolean", "Case-insensitive text matching. Defaults to true."),
+                prop("include_missing", "boolean", "Include missing rows for range, category, or text filters.")),
+                args -> prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "base_row_set_id", "all"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null),
+                        requiredString(args, "column_id"),
+                        requiredString(args, "filter_type"),
+                        optionalDouble(args, "minimum", null),
+                        optionalDouble(args, "maximum", null),
+                        optionalStringList(args, "values"),
+                        optionalString(args, "pattern", null),
+                        optionalString(args, "text_mode", null),
+                        optionalNullableBoolean(args, "case_insensitive"),
+                        optionalNullableBoolean(args, "include_missing"))));
         add(result, "combine_prism_row_sets", "Creates a new Prism row set from existing session row sets using union/merge, intersect, or subtract.", schema(
                 required("session_id", "operation", "row_set_ids"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -316,6 +390,100 @@ final class McpChemistryTools {
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID.")),
                 args -> prism.rowSetStructures(requiredString(args, "session_id"), requiredString(args, "row_set_id")));
+        add(result, "list_prism_groupings", "Lists reusable row groupings published in one managed Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listGroupings(requiredString(args, "session_id")));
+        add(result, "get_prism_grouping", "Returns a paged description of groups, hierarchy, representatives, and member counts for one Prism grouping.", schema(
+                required("session_id", "grouping_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("grouping_id", "string", "Prism grouping ID."),
+                prop("offset", "integer", "Zero-based group offset."),
+                prop("limit", "integer", "Maximum groups returned.")),
+                args -> prism.getGrouping(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "grouping_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "create_prism_group_row_set", "Creates a Prism row set from any group in a reusable session grouping.", schema(
+                required("session_id", "grouping_id", "group_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("grouping_id", "string", "Prism grouping ID."),
+                prop("group_id", "string", "Group ID within the grouping."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                args -> prism.createGroupRowSet(new CreatePrismGroupRowSetRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "grouping_id"),
+                        requiredString(args, "group_id"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null))));
+        add(result, "cluster_prism_row_set", "Clusters structures from a managed Prism row set, publishes a reusable grouping, and optionally exposes its facet and similarity column.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Source Prism row set. Defaults to all."),
+                prop("analysis_id", "string", "Optional unique analysis ID."),
+                prop("label", "string", "Optional analysis and column label."),
+                prop("descriptor", "string", "Descriptor name. Defaults to skelspheres."),
+                prop("threshold", "number", "Representative similarity threshold. Defaults to 0.80."),
+                prop("max_cross_neighbors", "integer", "Maximum nearest cross-cluster neighbors. Defaults to 5."),
+                prop("publish_columns", "boolean", "Show the grouping facet and publish the similarity column. Defaults to true.")),
+                args -> prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "row_set_id", "all"),
+                        optionalString(args, "analysis_id", null),
+                        optionalString(args, "label", null),
+                        optionalString(args, "descriptor", null),
+                        optionalDouble(args, "threshold", null),
+                        optionalInt(args, "max_cross_neighbors", 5),
+                        optionalNullableBoolean(args, "publish_columns"))));
+        add(result, "list_prism_analyses", "Lists provider-managed detailed analysis artifacts associated with one Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listAnalyses(requiredString(args, "session_id")));
+        add(result, "get_prism_clustering", "Returns a paged rich clustering summary from the Structurized artifact associated with a Prism grouping.", schema(
+                required("session_id", "analysis_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("analysis_id", "string", "Clustering artifact and grouping ID."),
+                prop("include_singletons", "boolean", "Include singleton clusters. Defaults to true."),
+                prop("offset", "integer", "Zero-based cluster offset."),
+                prop("limit", "integer", "Maximum clusters returned.")),
+                args -> prism.getClustering(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "analysis_id"),
+                        optionalBoolean(args, "include_singletons", true),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "get_prism_cluster_members", "Returns paged Prism rows for one cluster while preserving dataframe row identity.", schema(
+                required("session_id", "analysis_id", "cluster_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("analysis_id", "string", "Clustering artifact and grouping ID."),
+                prop("cluster_id", "string", "Cluster ID such as cluster_1."),
+                prop("offset", "integer", "Zero-based member offset."),
+                prop("limit", "integer", "Maximum members returned.")),
+                args -> prism.getClusterMembers(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "analysis_id"),
+                        requiredString(args, "cluster_id"),
+                        optionalInt(args, "offset", 0),
+                        optionalInt(args, "limit", 100)));
+        add(result, "create_prism_cluster_row_set", "Compatibility tool that creates a Prism row set from one clustering-backed group.", schema(
+                required("session_id", "analysis_id", "cluster_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("analysis_id", "string", "Session-owned clustering analysis ID."),
+                prop("cluster_id", "string", "Cluster ID such as cluster_1."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                args -> prism.createClusterRowSet(new CreatePrismClusterRowSetRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "analysis_id"),
+                        requiredString(args, "cluster_id"),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null))));
         add(result, "get_prism_dataset_info", "Returns counts, subject sets, and endpoint summaries for one PRISM dataset/session.", schema(
                 required("dataset_id"),
                 prop("dataset_id", "string", "Loaded PRISM dataset ID.")),
@@ -628,7 +796,7 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> inspect row sets/columns for PrismPack sessions; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures -> get_clustering -> summarize_clusters_by_endpoint for TSV-backed workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> cluster_prism_row_set -> get_prism_clustering for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
                     """;
             case "payload_hygiene" -> """
@@ -639,17 +807,17 @@ final class McpChemistryTools {
                     """;
             case "prism_workflow" -> """
                     # Prism Workflow
-                    Open a PrismPack directory with open_prism_pack, then call describe_prism_session_for_agent or list_prism_columns to inspect runtime columns, endpoint-like columns, structures, and row sets.
+                    Open a PrismPack directory with open_prism_pack, then call describe_prism_session_for_agent or list_prism_columns to inspect runtime columns, endpoint-like columns, structures, and row sets. Use create_prism_column_row_set to define an analysis scope without changing visible table filters, then cluster_prism_row_set to publish a reusable grouping into the same session.
                     Open a TSV bundle with open_prism_dataset when canonical TSV subject sets and endpoint records are needed; inspect endpoints and subject sets, then materialize a subject set into a chemistry repository.
                     Use repository IDs returned by materialize_prism_subject_set for legacy structure search, clustering, and decomposition evaluation.
                     Endpoint summaries, create_endpoint_selection, create_subject_measurement_date_selection, and export_selection_table use Prism subject IDs preserved in materialized structure fields. create_endpoint_selection creates reusable potency/property/date subsets with operators gt/gte/lt/lte/eq and optional first/last measurement date bounds. create_subject_measurement_date_selection aggregates first/last measurement dates across all or selected endpoints and is the preferred way to identify likely newest compounds. export_selection_table writes long endpoint rows with first_measurement/last_measurement and optional subject aggregate measurement date columns.
                     """;
             case "clustering_workflow" -> """
                     # Clustering Workflow
-                    Run cluster_structures with SkelSpheres threshold around 0.75-0.85 for rough chemotype neighborhoods.
-                    Use get_clustering for representative-led summaries, then summarize_clusters_by_endpoint to compare endpoint distributions without member payloads. By default, cluster endpoint summaries return a paged table of non-singleton clusters only.
-                    Pass include_singletons:true only when auditing singleton behavior. Use output_target:file for complete per-cluster endpoint tables.
-                    Use get_cluster_members with create_selection:true for a cluster-specific selection, combine_selections to intersect clusters with structural searches, or output_target:file for a larger member list.
+                    For a managed Prism session, create a scope with create_prism_column_row_set and run cluster_prism_row_set with a SkelSpheres threshold around 0.75-0.85. Structurized retains the rich artifact while Prism receives a reusable grouping; publish_columns also shows its categorical facet and adds representative similarity.
+                    Use list_prism_groupings and get_prism_grouping for provider-neutral inspection. Use get_prism_clustering and get_prism_cluster_members for rich clustering details. Call create_prism_group_row_set, or the compatibility create_prism_cluster_row_set, only for groups that should become named reusable scopes.
+                    The repository-based cluster_structures, get_clustering, and get_cluster_members tools remain available for standalone chemistry repositories and selections.
+                    Use summarize_clusters_by_endpoint and output_target:file for the legacy materialized-dataset workflow when complete per-cluster endpoint tables are required.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules
@@ -1782,6 +1950,23 @@ final class McpChemistryTools {
         return new Property(name, schema);
     }
 
+    private static Property moleculeArrayProp() {
+        Map<String, Object> itemProperties = new LinkedHashMap<>();
+        itemProperties.put("title", Map.of("type", "string", "description", "Optional molecule title."));
+        itemProperties.put("mode", Map.of("type", "string", "description", "molecule or fragment; defaults to molecule."));
+        itemProperties.put("structure", Map.of("type", "string", "description", "SMILES for molecule mode or SMARTS for fragment mode."));
+        Map<String, Object> items = new LinkedHashMap<>();
+        items.put("type", "object");
+        items.put("properties", itemProperties);
+        items.put("required", List.of("structure"));
+        items.put("additionalProperties", false);
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "array");
+        schema.put("items", items);
+        schema.put("description", "Ordered molecule documents to add.");
+        return new Property("molecules", schema);
+    }
+
     private static String requiredString(ObjectNode args, String name) {
         String value = optionalString(args, name, null);
         if (value == null || value.isBlank()) {
@@ -1869,6 +2054,25 @@ final class McpChemistryTools {
                 throw new ChemOperationException("invalid_arguments", "Argument " + name + " must contain only strings.");
             }
             result.add(item.asText());
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<PrismMoleculeInput> moleculeInputs(ObjectNode args) {
+        JsonNode node = args.get("molecules");
+        if (node == null || !node.isArray()) {
+            throw new ChemOperationException("invalid_arguments", "Argument molecules must be an array of objects.");
+        }
+        ArrayList<PrismMoleculeInput> result = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (!(item instanceof ObjectNode object)) {
+                throw new ChemOperationException("invalid_arguments", "Argument molecules must contain only objects.");
+            }
+            result.add(new PrismMoleculeInput(
+                    optionalString(object, "title", null),
+                    optionalString(object, "mode", "molecule"),
+                    requiredString(object, "structure")
+            ));
         }
         return List.copyOf(result);
     }

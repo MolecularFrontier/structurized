@@ -2,6 +2,7 @@ package tech.molecules.structurized.ai.prism;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.model.RegisterStructureRequest;
 import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
@@ -17,6 +18,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -84,6 +86,15 @@ class InMemoryPrismBridgeServiceTest {
         PrismSessionAgentDescription description = ctx.prism.describeSessionForAgent("moonshot");
         PrismRowSetMembersView members = ctx.prism.getRowSetMembers("moonshot", "all", 0, 3);
         PrismRowSetStructureCollection structures = ctx.prism.rowSetStructures("moonshot", "all");
+        PrismRowSetSummary potent = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "moonshot", "all", "potent_moonshot", "Potent Moonshot compounds", null,
+                "mpro_fluorescence_pIC50", "numeric_range", 7.0, null,
+                List.of(), null, null, null, false
+        ));
+        PrismClusteringSummary potentClusters = ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                "moonshot", "potent_moonshot", "moonshot_potent_clusters", "Potent clusters",
+                null, 0.8, 3, true
+        ));
 
         assertEquals("moonshot", opened.sessionId());
         assertTrue(opened.totalRowCount() > 0);
@@ -96,8 +107,159 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(3, members.members().size());
         assertTrue(members.members().getFirst().fields().containsKey("prism.column.smiles"));
         assertTrue(structures.structureCount() > 0);
+        assertTrue(potent.rowCount() > 0);
+        assertEquals(potent.rowCount(), potentClusters.inputMoleculeCount());
+        assertTrue(potentClusters.clusterCount() > 0);
+        assertTrue(ctx.prism.listColumns("moonshot").stream()
+                .anyMatch(column -> column.columnId().equals("moonshot_potent_clusters.cluster_id")));
     }
 
+    @Test
+    void createsRuntimeColumnRowSetsWithEngineFilterSemantics() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "demo", "Demo dataset"));
+
+        PrismRowSetSummary numeric = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "demo", "all", "potent_runtime", null, null,
+                "pIC50", "numeric_range", 7.0, null,
+                List.of(), null, null, null, false
+        ));
+        PrismRowSetSummary category = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "demo", "all", "series_a_runtime", null, null,
+                "series", "category_include", null, null,
+                List.of("A"), null, null, null, false
+        ));
+        PrismRowSetSummary regex = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "demo", "series_a_runtime", "regex_runtime", null, null,
+                "subject_id", "text_pattern", null, null,
+                List.of(), "CMP-00[12]", "regex", true, false
+        ));
+        PrismRowSetSummary missing = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "demo", "all", "missing_structure_runtime", null, null,
+                "smiles", "missing", null, null,
+                List.of(), null, null, null, null
+        ));
+
+        assertEquals(1, numeric.rowCount());
+        assertEquals(2, category.rowCount());
+        assertEquals(2, regex.rowCount());
+        assertEquals(1, missing.rowCount());
+        assertEquals("CMP-001", ctx.prism.getRowSetMembers("demo", "potent_runtime", 0, 10).members().getFirst().rowId());
+        assertEquals("CMP-003", ctx.prism.getRowSetMembers("demo", "missing_structure_runtime", 0, 10).members().getFirst().rowId());
+    }
+
+    @Test
+    void clusteringReportsSkippedRowsAndRejectsAnEmptyStructureScope() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "skip_demo", "Skip demo"));
+
+        PrismClusteringSummary clustered = ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                "skip_demo", "all", "valid_only", null,
+                null, 0.8, 1, false
+        ));
+        PrismRowSetSummary missing = ctx.prism.createColumnRowSet(new CreatePrismColumnRowSetRequest(
+                "skip_demo", "all", "missing_only", null, null,
+                "smiles", "missing", null, null,
+                List.of(), null, null, null, null
+        ));
+        ChemOperationException exception = assertThrows(ChemOperationException.class,
+                () -> ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                        "skip_demo", "missing_only", "empty", null,
+                        null, null, null, true
+                )));
+
+        assertEquals(2, clustered.inputMoleculeCount());
+        assertEquals(2, clustered.skippedRowCount());
+        assertTrue(clustered.skippedRows().stream().anyMatch(row -> row.reason().equals("missing_structure")));
+        assertTrue(clustered.skippedRows().stream().anyMatch(row -> row.reason().equals("invalid_structure")));
+        assertEquals(1, missing.rowCount());
+        assertEquals("no_clusterable_prism_rows", exception.code());
+        assertEquals(1, ctx.prism.listAnalyses("skip_demo").size());
+    }
+
+    @Test
+    void publishesClusteringAsAReusableGroupingEvenWhenColumnsStayHidden() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(
+                clusteringDataset(),
+                "grouping_demo",
+                "Grouping demo"
+        ));
+
+        PrismClusteringSummary clustered = ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                "grouping_demo",
+                "all",
+                "hidden_clusters",
+                "Hidden clusters",
+                null,
+                1.0,
+                2,
+                false
+        ));
+        List<PrismGroupingSummary> summaries = ctx.prism.listGroupings("grouping_demo");
+        PrismGroupingView grouping = ctx.prism.getGrouping(
+                "grouping_demo",
+                "hidden_clusters",
+                0,
+                10
+        );
+        String groupId = grouping.groups().getFirst().groupId();
+        PrismRowSetSummary rows = ctx.prism.createGroupRowSet(new CreatePrismGroupRowSetRequest(
+                "grouping_demo",
+                "hidden_clusters",
+                groupId,
+                "generic_group_rows",
+                null,
+                null
+        ));
+
+        assertTrue(clustered.analysis().publishedColumnIds().isEmpty());
+        assertEquals(1, summaries.size());
+        assertEquals("hidden_clusters.cluster_id", summaries.getFirst().facetColumnId());
+        assertEquals("EXCLUSIVE", summaries.getFirst().mode());
+        assertEquals(clustered.clusterCount(), grouping.totalGroups());
+        assertEquals(grouping.groups().getFirst().memberCount(), rows.rowCount());
+        assertEquals("hidden_clusters", rows.provenance().get("groupingId"));
+        assertTrue(ctx.prism.listColumns("grouping_demo").stream()
+                .anyMatch(column -> column.columnId().equals("hidden_clusters.cluster_id")));
+    }
+    @Test
+    void clustersPrismRowsByRowIdentityAndPublishesSessionProjections() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(clusteringDataset(), "cluster_demo", "Cluster demo"));
+
+        PrismClusteringSummary clustered = ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                "cluster_demo", "all", "rough", "Rough clusters",
+                null, 1.0, 2, true
+        ));
+        PrismClusteringView view = ctx.prism.getClustering("cluster_demo", "rough", true, 0, 10);
+        PrismClusterMembersView members = ctx.prism.getClusterMembers(
+                "cluster_demo", "rough", "cluster_1", 0, 10
+        );
+        PrismRowSetSummary clusterSet = ctx.prism.createClusterRowSet(new CreatePrismClusterRowSetRequest(
+                "cluster_demo", "rough", "cluster_1", "benzene_cluster", null, null
+        ));
+        PrismRowSetMembersView publishedMembers = ctx.prism.getRowSetMembers(
+                "cluster_demo", "benzene_cluster", 0, 10
+        );
+
+        assertEquals(1L, clustered.analysis().sourceRevision());
+        assertEquals(2L, clustered.analysis().resultRevision());
+        assertEquals(List.of("rough.cluster_id", "rough.similarity_to_representative"),
+                clustered.analysis().publishedColumnIds());
+        assertEquals(3, clustered.inputMoleculeCount());
+        assertEquals(2, clustered.clusterCount());
+        assertEquals(1, ctx.prism.listAnalyses("cluster_demo").size());
+        assertEquals(2, view.totalClusters());
+        assertEquals(2, view.clusters().getFirst().size());
+        assertEquals(List.of("ROW-A", "ROW-B"), members.members().stream().map(PrismClusterMember::rowId).toList());
+        assertEquals(List.of("S-BENZENE", "S-BENZENE"),
+                members.members().stream().map(PrismClusterMember::structureId).toList());
+        assertEquals(2, clusterSet.rowCount());
+        assertEquals("rough", clusterSet.provenance().get("analysisId"));
+        assertEquals("cluster_1", publishedMembers.members().getFirst().fields().get("prism.column.rough.cluster_id"));
+        assertEquals(3L, ctx.prism.getSessionInfo("cluster_demo").summary().revision());
+    }
     @Test
     void materializesSubjectSetAsChemistryRepositoryAndKeepsEndpointValuesInPrism() throws Exception {
         Path dataset = prismDataset();
@@ -157,9 +319,41 @@ class InMemoryPrismBridgeServiceTest {
         assertFalse(ctx.prism.getEndpointValues("demo", List.of("CMP-002"), List.of("pIC50")).isEmpty());
     }
 
+    @Test
+    void managesOrderedMoleculeAndFragmentDocumentsInOneSessionChange() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "demo", "Demo dataset"));
+        ManagedPrismSession managed = ctx.registry.require("demo");
+        long before = managed.revision();
+
+        PrismMoleculeListSummary list = ctx.prism.createMoleculeList(
+                new CreatePrismMoleculeListRequest("demo", "ideas", "Less-basic analogues"));
+        long afterList = managed.revision();
+        PrismMoleculeListView populated = ctx.prism.addMolecules(new AddPrismMoleculesRequest(
+                "demo", list.listId(), List.of(
+                new PrismMoleculeInput("Candidate", "molecule", "CCN"),
+                new PrismMoleculeInput("Exit vector query", "fragment", "[c,n]1ccccc1[*]")
+        )));
+
+        assertEquals(before + 1, afterList);
+        assertEquals(afterList + 1, managed.revision());
+        assertEquals(List.of("Candidate", "Exit vector query"),
+                populated.documents().stream().map(PrismMoleculeDocumentSummary::title).toList());
+        assertEquals(List.of("molecule", "fragment"),
+                populated.documents().stream().map(PrismMoleculeDocumentSummary::mode).toList());
+        assertFalse(populated.documents().getFirst().structure().isBlank());
+        assertFalse(populated.documents().getLast().structure().isBlank());
+    }
+
     private TestContext context() {
         StructureRepositoryService repositories = new InMemoryStructureRepositoryService();
-        return new TestContext(repositories, new InMemoryPrismBridgeService(repositories), new OclStructureSearchService(repositories));
+        InMemoryPrismSessionRegistry registry = new InMemoryPrismSessionRegistry();
+        return new TestContext(
+                repositories,
+                new InMemoryPrismBridgeService(repositories, registry),
+                new OclStructureSearchService(repositories),
+                registry
+        );
     }
 
     private static Path moonshotPrismPack() {
@@ -174,6 +368,35 @@ class InMemoryPrismBridgeServiceTest {
             }
         }
         return candidates[0];
+    }
+
+    private Path clusteringDataset() throws Exception {
+        Path dir = tempDir.resolve("clustering-prism-tsv");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("endpoints.prism.tsv"), String.join("\n",
+                "endpoint_id\tname\tpath\tdatatype\tendpoint_type\tevaluation_mode\tunit\tscale\tdomain_lower_bound\tdomain_upper_bound\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subjects.prism.tsv"), String.join("\n",
+                "subject_id\tstructure_id\tbatch_id\tproject\tseries\tsmiles",
+                "ROW-A\tS-BENZENE\tB-001\tDemo\tA\tc1ccccc1",
+                "ROW-B\tS-BENZENE\tB-002\tDemo\tA\tc1ccccc1",
+                "ROW-C\tS-ETHANOL\tB-003\tDemo\tB\tCCO",
+                ""
+        ));
+        Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
+                "subject_id\tendpoint_id\tstate\tmean\tn\traw_values",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
+                "subject_set_id\tname\tset_type\tsubject_set_scope\tparent_set_id\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_set_memberships.prism.tsv"), String.join("\n",
+                "subject_set_id\tsubject_id",
+                ""
+        ));
+        return dir;
     }
 
     private Path prismDataset() throws Exception {
@@ -213,5 +436,10 @@ class InMemoryPrismBridgeServiceTest {
         return dir;
     }
 
-    private record TestContext(StructureRepositoryService repositories, PrismBridgeService prism, StructureSearchService search) {}
+    private record TestContext(
+            StructureRepositoryService repositories,
+            PrismBridgeService prism,
+            StructureSearchService search,
+            InMemoryPrismSessionRegistry registry
+    ) {}
 }
