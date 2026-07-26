@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(79, tools.size());
+        assertEquals(84, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -87,6 +87,11 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "list_prism_groupings"));
         assertTrue(hasTool(tools, "get_prism_grouping"));
         assertTrue(hasTool(tools, "create_prism_group_row_set"));
+        assertTrue(hasTool(tools, "list_prism_graphs"));
+        assertTrue(hasTool(tools, "summarize_prism_graph"));
+        assertTrue(hasTool(tools, "inspect_prism_graph_neighborhood"));
+        assertTrue(hasTool(tools, "create_prism_graph_neighborhood_row_set"));
+        assertTrue(hasTool(tools, "mine_prism_mmp_graph"));
         assertTrue(hasTool(tools, "summarize_prism_row_set_by_columns"));
         assertTrue(hasTool(tools, "summarize_prism_grouping_by_columns"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));

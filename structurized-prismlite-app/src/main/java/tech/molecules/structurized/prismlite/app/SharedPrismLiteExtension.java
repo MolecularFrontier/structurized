@@ -1,7 +1,10 @@
 package tech.molecules.structurized.prismlite.app;
 
+import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
 import tech.molecules.structurized.ai.prism.ManagedPrismSession;
+import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.prism.PrismSessionRegistry;
+import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prismlite.swing.PrismLiteSwingContext;
@@ -18,9 +21,15 @@ import java.util.Objects;
 
 public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
     private final PrismSessionRegistry registry;
+    private final PrismBridgeService bridge;
 
     public SharedPrismLiteExtension(PrismSessionRegistry registry) {
+        this(registry, new InMemoryPrismBridgeService(new InMemoryStructureRepositoryService(), registry));
+    }
+
+    public SharedPrismLiteExtension(PrismSessionRegistry registry, PrismBridgeService bridge) {
         this.registry = Objects.requireNonNull(registry, "registry");
+        this.bridge = Objects.requireNonNull(bridge, "bridge");
     }
 
     @Override
@@ -42,6 +51,12 @@ public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
                 context.workspace()::focusColumnInspector
         );
         context.workspace().addApplicationTab("molecules", "Molecules", moleculePanel);
+        context.workspace().addApplicationTab("mmp", "MMP Graphs", new PrismMmpGraphPanel(
+                bridge,
+                managed.sessionId(),
+                context.workspace().model(),
+                context.refresh()
+        ));
         SharedSessionRefreshBinding binding = new SharedSessionRefreshBinding(
                 managed,
                 () -> {

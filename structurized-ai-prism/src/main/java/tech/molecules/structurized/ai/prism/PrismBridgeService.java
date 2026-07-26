@@ -31,6 +31,16 @@ public interface PrismBridgeService {
 
     List<PrismGroupingSummary> listGroupings(String sessionId);
 
+    List<PrismGraphSummary> listGraphs(String sessionId);
+
+    PrismGraphSummary summarizeGraph(String sessionId, String graphId);
+
+    PrismGraphNeighborhood inspectGraphNeighborhood(String sessionId, String graphId, String centerRowId, int limit);
+
+    PrismRowSetSummary createGraphNeighborhoodRowSet(CreatePrismGraphNeighborhoodRowSetRequest request);
+
+    PrismMmpGraphSummary mineMmpGraph(MinePrismMmpGraphRequest request);
+
     PrismGroupingView getGrouping(String sessionId, String groupingId, int offset, int limit);
 
     PrismRowSetSummary createGroupRowSet(CreatePrismGroupRowSetRequest request);

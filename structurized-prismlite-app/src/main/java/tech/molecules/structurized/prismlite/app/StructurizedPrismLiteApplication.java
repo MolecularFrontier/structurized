@@ -34,7 +34,7 @@ public final class StructurizedPrismLiteApplication {
         PrismLiteFrame frame = PrismLiteFrame.open(
                 managed.workspace(),
                 options.sourcePath(),
-                List.of(new SharedPrismLiteExtension(registry))
+                List.of(new SharedPrismLiteExtension(registry, bridge))
         );
         McpJsonRpcHandler handler = McpJsonRpcHandler.create(repositories, bridge);
         try {

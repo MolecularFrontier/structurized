@@ -29,12 +29,14 @@ import tech.molecules.structurized.ai.prism.ClusterPrismRowSetRequest;
 import tech.molecules.structurized.ai.prism.AddPrismMoleculesRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismMoleculeListRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismClusterRowSetRequest;
+import tech.molecules.structurized.ai.prism.CreatePrismGraphNeighborhoodRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismGroupRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismColumnRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismEndpointRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.CombinePrismRowSetsRequest;
 import tech.molecules.structurized.ai.prism.EvaluatePrismPredictionRequest;
+import tech.molecules.structurized.ai.prism.MinePrismMmpGraphRequest;
 import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
 import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
@@ -475,6 +477,70 @@ final class McpChemistryTools {
                         optionalString(args, "row_set_id", null),
                         optionalString(args, "name", null),
                         optionalString(args, "description", null))));
+        add(result, "list_prism_graphs", "Lists reusable row graphs published in one managed Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listGraphs(requiredString(args, "session_id")));
+        add(result, "summarize_prism_graph", "Returns a compact summary for one Prism row graph.", schema(
+                required("session_id", "graph_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID.")),
+                args -> prism.summarizeGraph(requiredString(args, "session_id"), requiredString(args, "graph_id")));
+        add(result, "inspect_prism_graph_neighborhood", "Inspects rows directly connected to a center row in a Prism row graph.", schema(
+                required("session_id", "graph_id", "center_row_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID."),
+                prop("center_row_id", "string", "Center Prism row ID."),
+                prop("limit", "integer", "Maximum neighbors returned. Defaults to 50.")),
+                args -> prism.inspectGraphNeighborhood(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "graph_id"),
+                        requiredString(args, "center_row_id"),
+                        optionalInt(args, "limit", 50)));
+        add(result, "create_prism_graph_neighborhood_row_set", "Creates a Prism row set from rows connected to a center row in a row graph.", schema(
+                required("session_id", "graph_id", "center_row_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID."),
+                prop("center_row_id", "string", "Center Prism row ID."),
+                prop("include_center", "boolean", "Whether to include the center row. Defaults to true."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                args -> prism.createGraphNeighborhoodRowSet(new CreatePrismGraphNeighborhoodRowSetRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "graph_id"),
+                        requiredString(args, "center_row_id"),
+                        optionalBoolean(args, "include_center", true),
+                        optionalString(args, "row_set_id", null),
+                        optionalString(args, "name", null),
+                        optionalString(args, "description", null))));
+        add(result, "mine_prism_mmp_graph", "Mines a matched molecular pair network from a Prism structure column and publishes it as a Prism row graph.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Source Prism row set. Defaults to all."),
+                prop("structure_column_id", "string", "Structure column ID. Defaults to the first structure column."),
+                prop("value_column_id", "string", "Optional numeric value column used for edge deltas."),
+                prop("graph_id", "string", "Optional output graph ID."),
+                prop("label", "string", "Optional graph label."),
+                prop("max_cuts", "integer", "Maximum cuts, 1 or 2. Defaults to Structurized MMP default."),
+                prop("min_transform_support", "integer", "Minimum transform support. Defaults to Structurized MMP default."),
+                prop("max_variable_heavy_atoms", "integer", "Maximum variable fragment heavy atoms."),
+                prop("max_variable_to_mol_heavy_atom_fraction", "number", "Maximum variable fragment fraction."),
+                prop("max_fragmentation_records_per_compound", "integer", "Per-compound fragmentation cap."),
+                prop("max_pairs_per_key", "integer", "Maximum pairs emitted for one constant key.")),
+                args -> prism.mineMmpGraph(new MinePrismMmpGraphRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "row_set_id", "all"),
+                        optionalString(args, "structure_column_id", null),
+                        optionalString(args, "value_column_id", null),
+                        optionalString(args, "graph_id", null),
+                        optionalString(args, "label", null),
+                        optionalInteger(args, "max_cuts"),
+                        optionalInteger(args, "min_transform_support"),
+                        optionalInteger(args, "max_variable_heavy_atoms"),
+                        optionalDouble(args, "max_variable_to_mol_heavy_atom_fraction", null),
+                        optionalInteger(args, "max_fragmentation_records_per_compound"),
+                        optionalInteger(args, "max_pairs_per_key"))));
         add(result, "summarize_prism_row_set_by_columns", "Summarizes runtime Prism columns for one row set without materializing a repository. Numeric columns return distribution statistics; other columns return top formatted values.", schema(
                 required("session_id", "row_set_id", "column_ids"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -2119,6 +2185,17 @@ final class McpChemistryTools {
         JsonNode node = args.get(name);
         if (node == null || node.isNull()) {
             return defaultValue;
+        }
+        if (!node.canConvertToInt()) {
+            throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be an integer.");
+        }
+        return node.asInt();
+    }
+
+    private static Integer optionalInteger(ObjectNode args, String name) {
+        JsonNode node = args.get(name);
+        if (node == null || node.isNull()) {
+            return null;
         }
         if (!node.canConvertToInt()) {
             throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be an integer.");

@@ -18,6 +18,8 @@ import tech.molecules.structurized.prism.engine.PrismMoleculeDocument;
 import tech.molecules.structurized.prism.engine.PrismMoleculeDocumentMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeList;
 import tech.molecules.structurized.prism.engine.PrismColumnSchema;
+import tech.molecules.structurized.prism.engine.PrismRowGraph;
+import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prism.engine.TextPatternFilter;
@@ -63,6 +65,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     private final StructureRepositoryService repositories;
     private final PrismArtifactRegistry artifactRegistry;
     private final PrismGroupingClusteringService clustering;
+    private final PrismMmpGraphService mmpGraphs;
     private final PrismPredictionService predictions;
     private final PrismSessionRegistry sessionRegistry;
     private final OclMoleculeDocumentCodec moleculeCodec = new OclMoleculeDocumentCodec();
@@ -90,6 +93,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         this.sessionRegistry = Objects.requireNonNull(sessionRegistry, "sessionRegistry");
         this.artifactRegistry = Objects.requireNonNull(artifactRegistry, "artifactRegistry");
         this.clustering = new PrismGroupingClusteringService(this.artifactRegistry);
+        this.mmpGraphs = new PrismMmpGraphService();
         this.predictions = new PrismPredictionService(this.artifactRegistry, Objects.requireNonNull(predictionRegistry, "predictionRegistry"));
     }
 
@@ -271,6 +275,94 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return session.workspace().groupings().stream()
                 .map(grouping -> groupingSummary(session, grouping))
                 .toList();
+    }
+
+    @Override
+    public synchronized List<PrismGraphSummary> listGraphs(String sessionId) {
+        ManagedPrismSession session = session(sessionId);
+        return session.workspace().graphs().stream()
+                .map(graph -> graphSummary(session, graph))
+                .toList();
+    }
+
+    @Override
+    public synchronized PrismGraphSummary summarizeGraph(String sessionId, String graphId) {
+        ManagedPrismSession session = session(sessionId);
+        return graphSummary(session, graph(session, graphId));
+    }
+
+    @Override
+    public synchronized PrismGraphNeighborhood inspectGraphNeighborhood(String sessionId,
+                                                                        String graphId,
+                                                                        String centerRowId,
+                                                                        int limit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        String rowId = normalizeId(centerRowId, "centerRowId");
+        if (session.workspace().physicalRowForRowId(rowId).isEmpty()) {
+            throw new ChemOperationException("prism_row_not_found", "Prism row " + rowId + " does not exist.");
+        }
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? 50 : limit));
+        List<String> neighborIds = graph.neighborRowIds(rowId).stream()
+                .sorted((a, b) -> Integer.compare(graph.degree(b), graph.degree(a)))
+                .limit(safeLimit)
+                .toList();
+        List<PrismGraphNeighbor> neighbors = neighborIds.stream()
+                .map(neighborId -> new PrismGraphNeighbor(
+                        rowMember(session, neighborId),
+                        graph.degree(neighborId),
+                        edgesBetween(graph, rowId, neighborId)
+                ))
+                .toList();
+        return new PrismGraphNeighborhood(
+                graphSummary(session, graph),
+                rowMember(session, rowId),
+                graph.neighborRowIds(rowId).size(),
+                graph.incidentEdges(rowId).size(),
+                neighbors
+        );
+    }
+
+    @Override
+    public synchronized PrismRowSetSummary createGraphNeighborhoodRowSet(CreatePrismGraphNeighborhoodRowSetRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        PrismRowGraph graph = graph(session, request.graphId());
+        String centerRowId = normalizeId(request.centerRowId(), "centerRowId");
+        LinkedHashSet<String> rowIds = new LinkedHashSet<>(graph.neighborRowIds(centerRowId));
+        if (request.includeCenter()) {
+            rowIds.add(centerRowId);
+        }
+        if (rowIds.isEmpty()) {
+            throw new ChemOperationException("empty_graph_neighborhood", "Graph neighborhood contains no rows.");
+        }
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? generatedRowSetId(session, graph.id().replaceAll("[^a-zA-Z0-9_]+", "_") + "_neighborhood")
+                : request.rowSetId().trim();
+        PrismRowSet rowSet = new PrismRowSet(
+                rowSetId,
+                request.name() == null || request.name().isBlank()
+                        ? graph.title() + " neighborhood / " + centerRowId
+                        : request.name().trim(),
+                request.description() == null || request.description().isBlank()
+                        ? "Rows connected to " + centerRowId + " in graph " + graph.id() + "."
+                        : request.description().trim(),
+                rowIds,
+                Map.of("source", "prism_row_graph_neighborhood", "graphId", graph.id(), "centerRowId", centerRowId)
+        );
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
+        return rowSetSummary(session, rowSet);
+    }
+
+    @Override
+    public synchronized PrismMmpGraphSummary mineMmpGraph(MinePrismMmpGraphRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? "all"
+                : request.rowSetId().trim();
+        PrismRowSet sourceRowSet = rowSet(session, rowSetId);
+        return mmpGraphs.mine(session, sourceRowSet, request);
     }
 
     @Override
@@ -1363,6 +1455,35 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 rowIds,
                 Map.of("source", "managed_prism_session")
         ));
+    }
+
+    private PrismRowGraph graph(ManagedPrismSession session, String graphId) {
+        String id = normalizeId(graphId, "graphId");
+        try {
+            return session.workspace().graph(id);
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException("prism_graph_not_found", "Prism graph " + id + " does not exist.", exception);
+        }
+    }
+
+    private PrismGraphSummary graphSummary(ManagedPrismSession session, PrismRowGraph graph) {
+        return PrismMmpGraphService.graphSummary(session, graph);
+    }
+
+    private List<PrismGraphEdgeView> edgesBetween(PrismRowGraph graph, String centerRowId, String neighborRowId) {
+        return graph.incidentEdges(centerRowId).stream()
+                .filter(edge -> connects(edge, centerRowId, neighborRowId))
+                .map(this::edgeView)
+                .toList();
+    }
+
+    private static boolean connects(PrismRowGraphEdge edge, String leftRowId, String rightRowId) {
+        return (edge.sourceRowId().equals(leftRowId) && edge.targetRowId().equals(rightRowId))
+                || (edge.sourceRowId().equals(rightRowId) && edge.targetRowId().equals(leftRowId));
+    }
+
+    private PrismGraphEdgeView edgeView(PrismRowGraphEdge edge) {
+        return new PrismGraphEdgeView(edge.id(), edge.sourceRowId(), edge.targetRowId(), edge.label(), edge.properties());
     }
 
     private PrismGrouping grouping(ManagedPrismSession session, String groupingId) {

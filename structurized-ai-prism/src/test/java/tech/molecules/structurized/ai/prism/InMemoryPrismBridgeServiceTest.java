@@ -262,6 +262,49 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(3L, ctx.prism.getSessionInfo("cluster_demo").summary().revision());
     }
     @Test
+    void minesMmpPairsAsReusablePrismGraph() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(mmpDataset(), "mmp_demo", "MMP demo"));
+
+        PrismMmpGraphSummary mined = ctx.prism.mineMmpGraph(new MinePrismMmpGraphRequest(
+                "mmp_demo",
+                "all",
+                "smiles",
+                "pIC50",
+                "mmp_network",
+                "MMP network",
+                1,
+                1,
+                4,
+                1.0,
+                null,
+                null
+        ));
+        List<PrismGraphSummary> graphs = ctx.prism.listGraphs("mmp_demo");
+        PrismGraphSummary summary = ctx.prism.summarizeGraph("mmp_demo", "mmp_network");
+        PrismGraphNeighborhood neighborhood = ctx.prism.inspectGraphNeighborhood(
+                "mmp_demo", "mmp_network", "TOLUENE", 10);
+        PrismRowSetSummary rowSet = ctx.prism.createGraphNeighborhoodRowSet(
+                new CreatePrismGraphNeighborhoodRowSetRequest(
+                        "mmp_demo", "mmp_network", "TOLUENE", true,
+                        "toluene_mmp_neighbors", null, null));
+
+        assertEquals("mmp_network", mined.graph().graphId());
+        assertEquals("chemistry.mmp", mined.graph().graphType());
+        assertEquals("structurized-mmp", mined.graph().pluginId());
+        assertEquals(2, mined.validStructureCount());
+        assertTrue(mined.pairCount() > 0);
+        assertEquals(List.of("mmp_network"), graphs.stream().map(PrismGraphSummary::graphId).toList());
+        assertEquals(mined.pairCount(), summary.edgeCount());
+        assertEquals("TOLUENE", neighborhood.center().rowId());
+        assertTrue(neighborhood.neighborCount() > 0);
+        assertEquals("ETHYLBENZENE", neighborhood.neighbors().getFirst().row().rowId());
+        assertFalse(neighborhood.neighbors().getFirst().edges().isEmpty());
+        assertEquals(2, rowSet.rowCount());
+        assertEquals("mmp_network", rowSet.provenance().get("graphId"));
+    }
+
+    @Test
     void evaluatesPredictionsAsSessionArtifactsAndColumns() throws Exception {
         TestContext ctx = context();
         ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "prediction_demo", "Prediction demo"));
@@ -447,6 +490,37 @@ class InMemoryPrismBridgeServiceTest {
         ));
         Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
                 "subject_id\tendpoint_id\tstate\tmean\tn\traw_values",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
+                "subject_set_id\tname\tset_type\tsubject_set_scope\tparent_set_id\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_set_memberships.prism.tsv"), String.join("\n",
+                "subject_set_id\tsubject_id",
+                ""
+        ));
+        return dir;
+    }
+
+    private Path mmpDataset() throws Exception {
+        Path dir = tempDir.resolve("mmp-prism-tsv");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("endpoints.prism.tsv"), String.join("\n",
+                "endpoint_id\tname\tpath\tdatatype\tendpoint_type\tevaluation_mode\tunit\tscale\tdomain_lower_bound\tdomain_upper_bound\tdescription",
+                "pIC50\tpIC50\tassay/pIC50\tNUMERIC\tMEASURED\tIMMEDIATE\tpIC50\tLOG\t0\t14\tBiochemical potency",
+                ""
+        ));
+        Files.writeString(dir.resolve("subjects.prism.tsv"), String.join("\n",
+                "subject_id\tstructure_id\tbatch_id\tproject\tseries\tsmiles",
+                "TOLUENE\tS-TOL\tB-001\tDemo\tA\tCc1ccccc1",
+                "ETHYLBENZENE\tS-ETH\tB-002\tDemo\tA\tCCc1ccccc1",
+                ""
+        ));
+        Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
+                "subject_id\tendpoint_id\tstate\tmean\tn\traw_values",
+                "TOLUENE\tpIC50\tVALUE\t1.0\t1\t1.0",
+                "ETHYLBENZENE\tpIC50\tVALUE\t3.5\t1\t3.5",
                 ""
         ));
         Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
