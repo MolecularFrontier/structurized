@@ -9,6 +9,8 @@ import tech.molecules.structurized.ai.prism.PrismGraphNeighborhood;
 import tech.molecules.structurized.ai.prism.PrismGraphSummary;
 import tech.molecules.structurized.ai.prism.PrismMmpGraphSummary;
 import tech.molecules.structurized.ai.prism.PrismRowSetSummary;
+import tech.molecules.structurized.prism.engine.PrismViewRecord;
+import tech.molecules.structurized.prism.engine.RowGraphNeighborhoodViewSpec;
 import tech.molecules.structurized.prismlite.swing.workspace.PrismLiteWorkspaceModel;
 
 import javax.swing.BorderFactory;
@@ -29,14 +31,18 @@ import javax.swing.JToolBar;
 import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 final class PrismMmpGraphPanel extends JPanel {
     private final PrismBridgeService bridge;
     private final String sessionId;
     private final PrismLiteWorkspaceModel workspaceModel;
     private final Runnable refreshWorkspace;
+    private final Consumer<String> focusView;
     private final DefaultComboBoxModel<RowSetItem> rowSets = new DefaultComboBoxModel<>();
     private final DefaultComboBoxModel<ColumnItem> structureColumns = new DefaultComboBoxModel<>();
     private final DefaultComboBoxModel<ColumnItem> valueColumns = new DefaultComboBoxModel<>();
@@ -57,12 +63,14 @@ final class PrismMmpGraphPanel extends JPanel {
     PrismMmpGraphPanel(PrismBridgeService bridge,
                        String sessionId,
                        PrismLiteWorkspaceModel workspaceModel,
-                       Runnable refreshWorkspace) {
+                       Runnable refreshWorkspace,
+                       Consumer<String> focusView) {
         super(new BorderLayout(6, 6));
         this.bridge = Objects.requireNonNull(bridge, "bridge");
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
         this.workspaceModel = Objects.requireNonNull(workspaceModel, "workspaceModel");
         this.refreshWorkspace = refreshWorkspace == null ? () -> { } : refreshWorkspace;
+        this.focusView = focusView == null ? ignored -> { } : focusView;
         details.setEditable(false);
         details.setLineWrap(true);
         details.setWrapStyleWord(true);
@@ -115,11 +123,14 @@ final class PrismMmpGraphPanel extends JPanel {
         inspect.addActionListener(event -> inspectFocusedRow());
         JButton rowSet = new JButton("Create Row Set");
         rowSet.addActionListener(event -> createNeighborhoodRowSet());
+        JButton chemFlow = new JButton("Open ChemFlow Neighborhood");
+        chemFlow.addActionListener(event -> openChemFlowNeighborhood());
         toolbar.add(refresh);
         toolbar.add(mine);
         toolbar.add(Box.createHorizontalGlue());
         toolbar.add(inspect);
         toolbar.add(rowSet);
+        toolbar.add(chemFlow);
         panel.add(toolbar, BorderLayout.SOUTH);
         return panel;
     }
@@ -243,6 +254,52 @@ final class PrismMmpGraphPanel extends JPanel {
         }
     }
 
+    private void openChemFlowNeighborhood() {
+        GraphItem graph = graphs.getSelectedValue();
+        String rowId = workspaceModel.focusedRowId();
+        ColumnItem structure = (ColumnItem) structureColumnSelector.getSelectedItem();
+        if (graph == null || rowId == null || structure == null || structure.column() == null) {
+            status.setText("Select a graph, structure column, and focused table row.");
+            return;
+        }
+        try {
+            String viewId = neighborhoodViewId(graph.graph().graphId(), rowId);
+            ColumnItem value = (ColumnItem) valueColumnSelector.getSelectedItem();
+            List<String> labelColumns = value == null || value.column() == null
+                    ? List.of()
+                    : List.of(value.column().columnId());
+            RowGraphNeighborhoodViewSpec spec = new RowGraphNeighborhoodViewSpec(
+                    viewId,
+                    graph.graph().title() + " around " + rowId,
+                    graph.graph().graphId(),
+                    rowId,
+                    structure.column().columnId(),
+                    labelColumns,
+                    18,
+                    false
+            );
+            PrismViewRecord record = new PrismViewRecord(
+                    spec.viewId(),
+                    spec.viewType(),
+                    spec.title(),
+                    spec,
+                    Instant.now(),
+                    Map.of("source", "mmp_graph_panel", "graphId", graph.graph().graphId(), "centerRowId", rowId)
+            );
+            boolean exists = workspaceModel.session().views().stream().anyMatch(view -> view.id().equals(viewId));
+            if (exists) {
+                workspaceModel.session().updateView(record);
+            } else {
+                workspaceModel.session().addView(record);
+            }
+            refreshWorkspace.run();
+            focusView.accept(viewId);
+            status.setText("Opened ChemFlow neighborhood for " + rowId + ".");
+        } catch (RuntimeException exception) {
+            showError("Could not open ChemFlow neighborhood", exception);
+        }
+    }
+
     private void selectGraph(String graphId) {
         for (int i = 0; i < graphModel.size(); i++) {
             if (graphModel.get(i).graph().graphId().equals(graphId)) {
@@ -256,6 +313,15 @@ final class PrismMmpGraphPanel extends JPanel {
         return "MOLECULE".equals(column.type())
                 || "chemical_structure".equals(column.semanticType())
                 || "primary_structure".equals(column.role());
+    }
+
+    private static String neighborhoodViewId(String graphId, String rowId) {
+        return "graph-neighborhood:" + safeId(graphId) + ":" + safeId(rowId);
+    }
+
+    private static String safeId(String value) {
+        String safe = String.valueOf(value).trim().replaceAll("[^A-Za-z0-9_.:-]+", "_");
+        return safe.isBlank() ? "item" : safe;
     }
 
     private static String formatGraph(PrismGraphSummary graph) {
