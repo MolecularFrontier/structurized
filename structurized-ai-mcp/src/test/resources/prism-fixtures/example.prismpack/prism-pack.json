@@ -1,0 +1,19 @@
+{
+  "prismPackVersion": "0.1",
+  "id": "example-sar-analysis",
+  "title": "Example SAR Analysis",
+  "description": "Prepared compound analysis package for DataWarrior inspection.",
+  "createdAt": "2026-07-06T10:30:00+02:00",
+  "createdBy": "Prism example fixture",
+  "dataframe": {
+    "id": "main",
+    "path": "data/dataframe.tsv",
+    "schema": "schema/dataframe.schema.json",
+    "rowType": "compound"
+  },
+  "molecules": "semantics/molecules.json",
+  "endpoints": "semantics/endpoints.json",
+  "tableView": "views/table-view.json",
+  "visualizations": "views/visualizations.json",
+  "provenance": "provenance/provenance.json"
+}

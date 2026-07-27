@@ -5,6 +5,7 @@ import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,7 +49,12 @@ class InMemoryPrismSessionRegistryTest {
         return PrismSession.open(examplePath());
     }
 
-    private static Path examplePath() {
-        return Path.of("..", "..", "prism", "examples", "example.prismpack").toAbsolutePath().normalize();
+    private static Path examplePath() throws Exception {
+        URL resource = InMemoryPrismSessionRegistryTest.class.getClassLoader()
+                .getResource("prism-fixtures/example.prismpack/prism-pack.json");
+        if (resource == null) {
+            throw new IllegalStateException("Missing PrismPack test fixture");
+        }
+        return Path.of(resource.toURI()).getParent();
     }
 }

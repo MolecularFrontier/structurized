@@ -11,6 +11,7 @@ import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryServ
 import tech.molecules.structurized.prism.engine.PrismSession;
 
 import javax.swing.SwingUtilities;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -77,7 +78,12 @@ class SharedSessionRefreshBindingTest {
         assertEquals(2L, managed.revision());
     }
 
-    private static Path examplePath() {
-        return Path.of("..", "..", "prism", "examples", "example.prismpack").toAbsolutePath().normalize();
+    private static Path examplePath() throws Exception {
+        URL resource = SharedSessionRefreshBindingTest.class.getClassLoader()
+                .getResource("prism-fixtures/example.prismpack/prism-pack.json");
+        if (resource == null) {
+            throw new IllegalStateException("Missing PrismPack test fixture");
+        }
+        return Path.of(resource.toURI()).getParent();
     }
 }

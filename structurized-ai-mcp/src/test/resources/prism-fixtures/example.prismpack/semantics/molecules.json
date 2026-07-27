@@ -1,0 +1,10 @@
+{
+  "primaryStructureColumn": "smiles",
+  "structureFormat": "smiles",
+  "compoundIdColumn": "compound_id",
+  "standardization": {
+    "saltStripped": null,
+    "tautomerCanonicalized": null,
+    "stereoPreserved": true
+  }
+}

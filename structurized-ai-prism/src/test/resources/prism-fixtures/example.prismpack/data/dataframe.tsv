@@ -1,0 +1,4 @@
+compound_id	smiles	series	pIC50	clogP	HLM_CLint	comment
+CMPD-001	CCOc1ccccc1	A	7.2	3.1	18	interesting
+CMPD-002	CCNc1ccccc1	A	6.8	2.9	42	
+CMPD-003	CCCl	B	5.9	2.1	80	check structure

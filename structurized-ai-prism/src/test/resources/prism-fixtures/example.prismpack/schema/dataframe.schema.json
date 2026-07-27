@@ -1,0 +1,54 @@
+{
+  "columns": [
+    {
+      "name": "compound_id",
+      "type": "string",
+      "semanticType": "compound_id",
+      "displayName": "Compound ID",
+      "role": "identifier"
+    },
+    {
+      "name": "smiles",
+      "type": "string",
+      "semanticType": "chemical_structure",
+      "structureFormat": "smiles",
+      "displayName": "Structure",
+      "role": "primary_structure"
+    },
+    {
+      "name": "series",
+      "type": "string",
+      "semanticType": "category",
+      "displayName": "Series"
+    },
+    {
+      "name": "pIC50",
+      "type": "number",
+      "semanticType": "endpoint_value",
+      "displayName": "pIC50",
+      "endpointId": "prism:endpoint:pIC50_example",
+      "direction": "higher_is_better"
+    },
+    {
+      "name": "clogP",
+      "type": "number",
+      "semanticType": "descriptor",
+      "displayName": "cLogP"
+    },
+    {
+      "name": "HLM_CLint",
+      "type": "number",
+      "semanticType": "endpoint_value",
+      "displayName": "HLM CLint",
+      "unit": "uL/min/mg",
+      "endpointId": "prism:endpoint:HLM_CLint_example",
+      "direction": "lower_is_better"
+    },
+    {
+      "name": "comment",
+      "type": "string",
+      "semanticType": "comment",
+      "displayName": "Comment"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "visualizations": [
+    {
+      "id": "potency-vs-clogp",
+      "type": "scatter",
+      "title": "Potency vs cLogP",
+      "x": "clogP",
+      "y": "pIC50",
+      "colorBy": "series",
+      "sizeBy": "HLM_CLint"
+    }
+  ]
+}

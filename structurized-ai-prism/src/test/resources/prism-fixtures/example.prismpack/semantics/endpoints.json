@@ -1,0 +1,21 @@
+{
+  "endpoints": [
+    {
+      "id": "prism:endpoint:pIC50_example",
+      "column": "pIC50",
+      "displayName": "pIC50",
+      "unit": null,
+      "direction": "higher_is_better",
+      "assay": "Example IC50 assay"
+    },
+    {
+      "id": "prism:endpoint:HLM_CLint_example",
+      "column": "HLM_CLint",
+      "displayName": "HLM CLint",
+      "unit": "uL/min/mg",
+      "direction": "lower_is_better",
+      "assay": "HLM",
+      "protocol": "example"
+    }
+  ]
+}

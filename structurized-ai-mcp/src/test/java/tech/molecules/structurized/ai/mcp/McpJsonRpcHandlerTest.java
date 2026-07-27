@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -13,7 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class McpJsonRpcHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -361,27 +361,33 @@ class McpJsonRpcHandlerTest {
                 published.at("/result/structuredContent/members/0/fields/prism.column.rough.cluster_id").asText());
     }
     @Test
-    void canOpenMoonshotPrismPackAndInspectSessionThroughToolCalls() throws Exception {
-        Path moonshot = moonshotPrismPack();
-        assumeTrue(Files.isDirectory(moonshot), "Moonshot PrismPack example is not available in the sibling prism checkout.");
+    void canOpenExamplePrismPackAndInspectSessionThroughToolCalls() throws Exception {
+        Path pack = examplePrismPack();
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
-        String path = moonshot.toString().replace("\\", "\\\\");
+        String path = pack.toString().replace("\\", "\\\\");
 
-        JsonNode opened = call(handler, request(10, "open_prism_pack",
-                "{\"path\":\"" + path + "\",\"session_id\":\"moonshot\",\"label\":\"Moonshot\"}"));
-        assertEquals("moonshot", opened.at("/result/structuredContent/sessionId").asText());
-        assertTrue(opened.at("/result/structuredContent/totalRowCount").asInt() > 0);
+        JsonNode opened = call(handler, request(10, "open_prism_pack", """
+                {"path":"%s","session_id":"example_pack","label":"Example pack"}
+                """.formatted(path)));
+        assertEquals("example_pack", opened.at("/result/structuredContent/sessionId").asText());
+        assertEquals(3, opened.at("/result/structuredContent/totalRowCount").asInt());
 
-        JsonNode columns = call(handler, request(11, "list_prism_columns", "{\"session_id\":\"moonshot\"}"));
+        JsonNode columns = call(handler, request(11, "list_prism_columns", """
+                {"session_id":"example_pack"}
+                """));
         assertTrue(columns.at("/result/structuredContent").toString().contains("smiles"));
-        assertTrue(columns.at("/result/structuredContent").toString().contains("mpro_fluorescence_pIC50"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("pIC50"));
 
-        JsonNode description = call(handler, request(12, "describe_prism_session_for_agent", "{\"session_id\":\"moonshot\"}"));
-        assertEquals("moonshot", description.at("/result/structuredContent/summary/sessionId").asText());
+        JsonNode description = call(handler, request(12, "describe_prism_session_for_agent", """
+                {"session_id":"example_pack"}
+                """));
+        assertEquals("example_pack", description.at("/result/structuredContent/summary/sessionId").asText());
         assertTrue(description.at("/result/structuredContent/structureColumns").size() >= 1);
         assertTrue(description.at("/result/structuredContent/endpointColumns").size() >= 1);
 
-        JsonNode members = call(handler, request(13, "get_prism_row_set_members", "{\"session_id\":\"moonshot\",\"row_set_id\":\"all\",\"limit\":1}"));
+        JsonNode members = call(handler, request(13, "get_prism_row_set_members", """
+                {"session_id":"example_pack","row_set_id":"all","limit":1}
+                """));
         assertEquals(1, members.at("/result/structuredContent/members").size());
         assertTrue(members.at("/result/structuredContent/members/0/fields").toString().contains("prism.column.smiles"));
     }
@@ -926,18 +932,13 @@ class McpJsonRpcHandlerTest {
         assertEquals("method_not_found", response.at("/error/data/code").asText());
     }
 
-    private static Path moonshotPrismPack() {
-        Path cwd = Path.of("").toAbsolutePath().normalize();
-        Path[] candidates = {
-                cwd.resolve("../prism/examples/moonshot-medchem.prismpack").normalize(),
-                cwd.resolve("../../prism/examples/moonshot-medchem.prismpack").normalize()
-        };
-        for (Path candidate : candidates) {
-            if (Files.isDirectory(candidate)) {
-                return candidate;
-            }
+    private static Path examplePrismPack() throws Exception {
+        URL resource = McpJsonRpcHandlerTest.class.getClassLoader()
+                .getResource("prism-fixtures/example.prismpack/prism-pack.json");
+        if (resource == null) {
+            throw new IllegalStateException("Missing PrismPack test fixture");
         }
-        return candidates[0];
+        return Path.of(resource.toURI()).getParent();
     }
 
     private Path prismDataset() throws Exception {

@@ -24,6 +24,7 @@ import javax.swing.JComponent;
 import java.awt.Component;
 import java.awt.Container;
 import java.lang.reflect.Field;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -144,8 +145,13 @@ class ChemFlowGraphNeighborhoodViewRendererTest {
         return document.elementsInZOrder().stream().filter(type::isInstance).count();
     }
 
-    private static Path examplePath() {
-        return Path.of("..", "..", "prism", "examples", "example.prismpack").toAbsolutePath().normalize();
+    private static Path examplePath() throws Exception {
+        URL resource = ChemFlowGraphNeighborhoodViewRendererTest.class.getClassLoader()
+                .getResource("prism-fixtures/example.prismpack/prism-pack.json");
+        if (resource == null) {
+            throw new IllegalStateException("Missing PrismPack test fixture");
+        }
+        return Path.of(resource.toURI()).getParent();
     }
 
     private record Fixture(PrismSession session, PrismColumn structure, String rowA, PrismRowGraph graph) {

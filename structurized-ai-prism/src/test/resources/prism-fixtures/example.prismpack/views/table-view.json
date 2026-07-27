@@ -1,0 +1,27 @@
+{
+  "id": "default-table",
+  "title": "SAR overview",
+  "columns": [
+    "compound_id",
+    "smiles",
+    "series",
+    "pIC50",
+    "clogP",
+    "HLM_CLint",
+    "comment"
+  ],
+  "frozenColumns": ["compound_id", "smiles"],
+  "hiddenColumns": [],
+  "sort": [
+    {"column": "pIC50", "direction": "desc"}
+  ],
+  "filters": [
+    {"column": "series", "type": "category"},
+    {"column": "pIC50", "type": "range"},
+    {"column": "HLM_CLint", "type": "range"}
+  ],
+  "colorRules": [
+    {"column": "pIC50", "type": "continuous", "direction": "higher_is_better"},
+    {"column": "HLM_CLint", "type": "continuous", "direction": "lower_is_better"}
+  ]
+}

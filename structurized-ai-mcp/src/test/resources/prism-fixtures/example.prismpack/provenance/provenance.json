@@ -1,0 +1,15 @@
+{
+  "sources": [
+    {
+      "type": "example",
+      "name": "PrismPack fixture",
+      "timestamp": "2026-07-06T10:20:00+02:00"
+    }
+  ],
+  "steps": [
+    {
+      "type": "data_preparation",
+      "name": "Created compact SAR example"
+    }
+  ]
+}
