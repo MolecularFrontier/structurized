@@ -7,7 +7,7 @@
     <parent>
         <groupId>tech.molecules</groupId>
         <artifactId>structurized</artifactId>
-        <version>0.2.5</version>
+        <version>0.2.6</version>
     </parent>
 
     <artifactId>structurized-prismlite-app</artifactId>
@@ -28,7 +28,7 @@
         <dependency>
             <groupId>tech.molecules</groupId>
             <artifactId>chemflow-ocl</artifactId>
-            <version>0.2.1</version>
+            <version>0.2.2</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
