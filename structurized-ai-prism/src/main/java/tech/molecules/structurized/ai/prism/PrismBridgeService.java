@@ -74,6 +74,16 @@ public interface PrismBridgeService {
 
     PrismRowSetMembersView getRowSetMembers(String sessionId, String rowSetId, int offset, int limit);
 
+    PrismRowSetColumnSummary summarizeRowsByColumns(
+            String sessionId,
+            List<String> rowIds,
+            List<String> columnIds,
+            Double threshold,
+            String thresholdDirection,
+            int topValuesLimit);
+
+    PrismRowSetSummary createRowSetFromRows(CreatePrismRowSetFromRowsRequest request);
+
     PrismRowSetSummary createRowSetFromSubjectSet(CreatePrismRowSetFromSubjectSetRequest request);
 
     PrismRowSetSummary createEndpointRowSet(CreatePrismEndpointRowSetRequest request);

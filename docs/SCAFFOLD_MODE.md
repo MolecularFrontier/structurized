@@ -14,6 +14,7 @@ Implemented objects:
 - `ScaffoldDecomposition`
 - `SubstitutionEvent`
 - `ScaffoldAnalyzer`
+- `ScaffoldDatasetDecomposition`
 
 ## Main idea
 
@@ -76,10 +77,29 @@ The current event typing is intentionally simple:
 This is enough to distinguish ordinary substituents from bridge / annulation / multi-anchor cases.
 Finer distinctions such as `BRIDGE` versus `ANNULATION` are not implemented yet.
 
+## Dataset-level scaffold SAR
+
+`ScaffoldDatasetDecomposition` applies one scaffold template to a compound set and records:
+
+- matched, unmatched, and multi-attachment compound counts;
+- observed exit-vector scaffold atoms and symmetry classes;
+- per-compound substituent assignments at single-attachment exit vectors;
+- 1D substituent projections for one scaffold atom;
+- sparse 2D projections for two scaffold atoms.
+
+The MCP layer exposes this as a compact scaffold SAR workflow over managed Prism row sets:
+
+- `discover_prism_scaffolds` mines candidate scaffold handles;
+- `analyze_prism_scaffold` stores a scaffold-analysis handle;
+- `get_prism_scaffold_projection` returns compact 1D, 2D, or n-dimensional bucket counts;
+- `create_prism_scaffold_bucket_row_set` turns a returned bucket key into a Prism row set;
+- `export_prism_scaffold_projection` writes a full TSV projection artifact.
+
 ## Current limitations
 
-1. This is scaffold matching, not scaffold discovery.
-   The scaffold must already be provided.
+1. Scaffold matching and scaffold discovery are separate concepts.
+   Scaffold matching requires a provided template, while candidate discovery is available through
+   `ScaffoldDiscoveryEngine` and the MCP `discover_prism_scaffolds` workflow.
 
 2. Exit vectors are implicit.
    All scaffold atoms are candidate exit vectors; no chemical filtering of “reasonable”
@@ -91,20 +111,17 @@ Finer distinctions such as `BRIDGE` versus `ANNULATION` are not implemented yet.
 4. Multi-attachment events are grouped, but not yet subclassified into bridge / cyclization /
    fused-ring extension categories.
 
-5. No dataset-level scaffold aggregation exists yet.
-   The current implementation is one scaffold against one compound at a time.
+5. N-dimensional projections in the MCP layer are compact grouping views over the existing
+   per-exit-vector assignments. They are not yet a full interactive SAR table editor.
 
 ## Recommended next steps
 
-1. Add dataset-level grouping:
-   scaffold template + many compounds + per-exit-vector statistics.
-
-2. Add more specific multi-anchor event classes:
+1. Add more specific multi-anchor event classes:
    bridge, annulation, cyclization, multi-anchor extension.
 
-3. Add richer symmetry-aware aggregation:
+2. Add richer symmetry-aware aggregation:
    concrete scaffold atom versus symmetry class versus matched-orientation information.
 
-4. Decide whether to introduce optional chemical filtering of candidate exit vectors.
+3. Decide whether to introduce optional chemical filtering of candidate exit vectors.
 
-5. Later, add scaffold discovery separately from scaffold decomposition.
+4. Add richer endpoint-aware ranking/scoring of scaffold projection buckets.

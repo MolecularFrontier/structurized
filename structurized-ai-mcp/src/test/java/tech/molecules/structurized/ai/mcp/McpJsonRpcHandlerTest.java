@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(88, tools.size());
+        assertEquals(93, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -96,6 +96,11 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "summarize_prism_mmp_transforms"));
         assertTrue(hasTool(tools, "create_prism_graph_neighborhood_row_set"));
         assertTrue(hasTool(tools, "mine_prism_mmp_graph"));
+        assertTrue(hasTool(tools, "discover_prism_scaffolds"));
+        assertTrue(hasTool(tools, "analyze_prism_scaffold"));
+        assertTrue(hasTool(tools, "get_prism_scaffold_projection"));
+        assertTrue(hasTool(tools, "create_prism_scaffold_bucket_row_set"));
+        assertTrue(hasTool(tools, "export_prism_scaffold_projection"));
         assertTrue(hasTool(tools, "summarize_prism_row_set_by_columns"));
         assertTrue(hasTool(tools, "summarize_prism_grouping_by_columns"));
         assertTrue(hasTool(tools, "materialize_prism_subject_set"));
@@ -853,6 +858,57 @@ class McpJsonRpcHandlerTest {
         assertTrue(fileHistogram.at("/result/structuredContent/rows").isMissingNode());
         Path artifact = Path.of(fileHistogram.at("/result/structuredContent/artifact/path").asText());
         assertEquals(2, mapper.readTree(artifact.toFile()).at("/rows").size());
+    }
+
+    @Test
+    void scaffoldSarWorkflowDiscoversProjectsAndExportsBuckets() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        Path dataset = mmpDataset();
+        String path = dataset.toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"sar_demo\"}"));
+
+        JsonNode discovery = call(handler, request(2, "discover_prism_scaffolds", """
+                {"session_id":"sar_demo","row_set_id":"all","discovery_id":"benzene_discovery","min_scaffold_heavy_atoms":6,"min_support":2,"limit":5}
+                """));
+        assertEquals("benzene_discovery", discovery.at("/result/structuredContent/discoveryId").asText());
+        assertTrue(discovery.at("/result/structuredContent/totalCandidates").asInt() >= 1);
+        assertEquals("scaffold_1", discovery.at("/result/structuredContent/candidates/0/candidateId").asText());
+        assertEquals(2, discovery.at("/result/structuredContent/candidates/0/supportCount").asInt());
+
+        JsonNode analysis = call(handler, request(3, "analyze_prism_scaffold", """
+                {"session_id":"sar_demo","row_set_id":"all","scaffold_analysis_id":"benzene_sar","scaffold_smiles":"c1ccccc1","top_substituent_limit":5}
+                """));
+        assertEquals("benzene_sar", analysis.at("/result/structuredContent/scaffoldAnalysisId").asText());
+        assertEquals(2, analysis.at("/result/structuredContent/matchedCount").asInt());
+        assertTrue(analysis.at("/result/structuredContent/observedExitVectorCount").asInt() >= 1);
+        int scaffoldAtom = analysis.at("/result/structuredContent/observedExitVectors/0/scaffoldAtom").asInt();
+
+        JsonNode projection = call(handler, request(4, "get_prism_scaffold_projection", """
+                {"scaffold_analysis_id":"benzene_sar","scaffold_atoms":[SCAT],"column_ids":["pIC50"],"threshold":2.0,"limit":10,"example_limit":2}
+                """.replace("SCAT", Integer.toString(scaffoldAtom))));
+        assertEquals(1, projection.at("/result/structuredContent/dimension").asInt());
+        assertTrue(projection.at("/result/structuredContent/totalBuckets").asInt() >= 1);
+        String bucketKey = projection.at("/result/structuredContent/rows/0/bucketKey").asText();
+        assertTrue(projection.at("/result/structuredContent/rows/0/count").asInt() >= 1);
+        assertEquals("pIC50", projection.at("/result/structuredContent/rows/0/columnSummaries/0/columnId").asText());
+        assertTrue(projection.at("/result/structuredContent/rows/0/columnSummaries/0/numeric/median").isNumber());
+
+        JsonNode rowSet = call(handler, request(5, "create_prism_scaffold_bucket_row_set", """
+                {"scaffold_analysis_id":"benzene_sar","scaffold_atoms":[SCAT],"bucket_key":"BUCKET","row_set_id":"first_benzene_bucket"}
+                """.replace("SCAT", Integer.toString(scaffoldAtom)).replace("BUCKET", bucketKey.replace("\\", "\\\\").replace("\"", "\\\""))));
+        assertEquals("first_benzene_bucket", rowSet.at("/result/structuredContent/rowSetId").asText());
+        assertTrue(rowSet.at("/result/structuredContent/rowCount").asInt() >= 1);
+
+        JsonNode export = call(handler, request(6, "export_prism_scaffold_projection", """
+                {"scaffold_analysis_id":"benzene_sar","scaffold_atoms":[SCAT],"output_name":"scaffold/benzene-projection.tsv"}
+                """.replace("SCAT", Integer.toString(scaffoldAtom))));
+        Path artifact = Path.of(export.at("/result/structuredContent/artifact/path").asText());
+        String tsv = Files.readString(artifact);
+        assertTrue(tsv.startsWith("bucket_key\tcount\texample_row_ids"));
+        assertTrue(tsv.contains(bucketKey));
+
+        JsonNode guide = call(handler, request(7, "get_structurized_tool_guide", "{\"topic\":\"scaffold_sar_workflow\"}"));
+        assertTrue(guide.at("/result/content/0/text").asText().contains("Scaffold SAR Workflow"));
     }
 
     @Test

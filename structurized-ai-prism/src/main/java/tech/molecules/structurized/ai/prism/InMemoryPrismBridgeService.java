@@ -699,6 +699,66 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return new PrismRowSetMembersView(rowSetSummary(session, rowSet), safeOffset, safeLimit, members);
     }
 
+
+    @Override
+    public synchronized PrismRowSetColumnSummary summarizeRowsByColumns(String sessionId,
+                                                                         List<String> rowIds,
+                                                                         List<String> columnIds,
+                                                                         Double threshold,
+                                                                         String thresholdDirection,
+                                                                         int topValuesLimit) {
+        ManagedPrismSession session = session(sessionId);
+        List<String> normalizedRowIds = rowIds == null ? List.of() : rowIds.stream()
+                .map(rowId -> normalizeId(rowId, "rowId"))
+                .toList();
+        List<PrismColumn> columns = summaryColumns(session, columnIds);
+        List<Integer> physicalRows = physicalRows(session, normalizedRowIds);
+        PrismRowSetSummary summary = new PrismRowSetSummary(
+                session.sessionId(),
+                "ad_hoc_rows",
+                "Ad hoc rows",
+                "Transient row subset used for server-side column summaries.",
+                normalizedRowIds.size(),
+                Map.of("source", "ad_hoc_rows")
+        );
+        return new PrismRowSetColumnSummary(
+                summary,
+                columns.stream().map(PrismColumn::id).toList(),
+                columns.stream()
+                        .map(column -> summarizeColumn(column, physicalRows, threshold, thresholdDirection, topValuesLimit))
+                        .toList()
+        );
+    }
+
+    @Override
+    public synchronized PrismRowSetSummary createRowSetFromRows(CreatePrismRowSetFromRowsRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        LinkedHashSet<String> rowIds = new LinkedHashSet<>();
+        for (String rowId : request.rowIds()) {
+            String normalized = normalizeId(rowId, "rowId");
+            if (session.workspace().physicalRowForRowId(normalized).isEmpty()) {
+                throw new ChemOperationException("prism_row_not_found", "Prism row " + normalized + " does not exist.");
+            }
+            rowIds.add(normalized);
+        }
+        if (rowIds.isEmpty()) {
+            throw new ChemOperationException("empty_prism_row_set", "Cannot create a Prism row set from zero rows.");
+        }
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? generatedRowSetId(session, "mcp_rows")
+                : request.rowSetId().trim();
+        PrismRowSet rowSet = new PrismRowSet(
+                rowSetId,
+                request.name() == null || request.name().isBlank() ? rowSetId : request.name().trim(),
+                request.description() == null ? "" : request.description().trim(),
+                rowIds,
+                request.provenance()
+        );
+        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
+        return rowSetSummary(session, rowSet);
+    }
+
     @Override
     public synchronized PrismRowSetSummary createRowSetFromSubjectSet(CreatePrismRowSetFromSubjectSetRequest request) {
         Objects.requireNonNull(request, "request");

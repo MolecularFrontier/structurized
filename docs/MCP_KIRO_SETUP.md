@@ -85,22 +85,25 @@ A typical first agent workflow is:
 8. Use `search_substructure` in default count mode first; request `output_mode:"ids"` or `output_mode:"full"` only when the count looks useful.
 9. Use `create_endpoint_selection` for numeric potency/property filters such as `pIC50 >= 7.0`; it creates a server-side selection from a repository or filters an existing selection.
 10. Use `create_selection:true` on searches or cluster-member calls when a server-side handle is needed for `summarize_selection_by_endpoint` or scoped `evaluate_decomposition`; use `combine_selections` for `union`/`merge`, `intersect`, and `subtract`.
-11. Use decomposition tools for deeper analysis: pass `selection_id` to `evaluate_decomposition` for selected chemotypes, then use `get_decomposition_fragment_summary` to find terminal paths and `get_decomposition_fragment_histogram` to rank distinct fragments with optional endpoint medians/hit rates.
-12. Use `export_selection_table` when the next step is Python, DuckDB, or plotting. It writes a TSV artifact with structure rows, optional long endpoint rows, and optional decomposition fragment columns.
+11. Use scaffold SAR tools for scaffold-centric R-group tables: `discover_prism_scaffolds` -> `analyze_prism_scaffold` -> `get_prism_scaffold_projection`; add `column_ids` to summarize Prism columns per returned bucket and use `create_prism_scaffold_bucket_row_set` for drill-down.
+12. Use decomposition tools for deeper recursive series analysis: pass `selection_id` to `evaluate_decomposition` for selected chemotypes, then use `get_decomposition_fragment_summary` to find terminal paths and `get_decomposition_fragment_histogram` to rank distinct fragments with optional endpoint medians/hit rates.
+13. Use `export_selection_table` or `export_prism_scaffold_projection` when the next step is Python, DuckDB, or plotting. These tools write TSV artifacts rather than returning full tables inline.
 
 Embedded MCP guidance:
 
 - Use `get_structurized_tool_guide` for server-provided workflow notes. Topics are `overview`,
-  `payload_hygiene`, `prism_workflow`, `clustering_workflow`, `decomposition_rules`, and
-  `artifact_output`. This works from the standalone jar without relying on repository Markdown files.
+  `payload_hygiene`, `prism_workflow`, `clustering_workflow`, `mmp_graph_workflow`,
+  `scaffold_sar_workflow`, `decomposition_rules`, and `artifact_output`. This works from the
+  standalone jar without relying on repository Markdown files.
 
 Payload hygiene defaults:
 
 - `search_substructure` defaults to `output_mode:"count"`, returning counts but no rows. Use `limit` and `offset` with `ids` or `full`.
 - `get_clustering` returns compact cluster rows, not full member lists.
 - `get_decomposition_fragment_summary` returns compact examples by default. Set `include_details:true` only when signatures and atom arrays are needed.
-- `get_decomposition_fragment_histogram` is the compact R-group SAR view: default `limit:50`, optional `dataset_id` + `endpoint_id`, and `output_target:"file"` for the full fragment table.
-- Server-side selections avoid copying large ID lists into the chat context; `create_endpoint_selection` creates numeric endpoint-filter subsets, `combine_selections` can merge/intersect/subtract handles, `evaluate_decomposition` accepts `selection_id` directly, and `export_selection_table` writes TSV artifacts for external analysis.
+- `get_decomposition_fragment_histogram` is the compact decomposition-fragment SAR view: default `limit:50`, optional `dataset_id` + `endpoint_id`, and `output_target:"file"` for the full fragment table.
+- `get_prism_scaffold_projection` is the compact scaffold SAR view: pass one scaffold atom for a 1D substituent table, two atoms for a sparse 2D table, or more atoms for top n-dimensional substituent combinations. Full projection tables should use `export_prism_scaffold_projection`.
+- Server-side selections and row sets avoid copying large ID lists into the chat context; `create_endpoint_selection` creates numeric endpoint-filter subsets, `combine_selections` can merge/intersect/subtract handles, `evaluate_decomposition` accepts `selection_id` directly, and export tools write TSV artifacts for external analysis.
 - For large drill-downs, set `output_target:"file"` and optionally provide a safe relative `output_name`. The response returns an artifact receipt instead of the full payload.
 
 Managed artifacts:
@@ -153,6 +156,40 @@ export_selection_table({
 ```
 
 The response contains an artifact receipt and schema. Data rows are written to the TSV file, not returned inline.
+
+Example scaffold SAR projection:
+
+```json
+discover_prism_scaffolds({
+  "session_id": "project1",
+  "row_set_id": "all",
+  "min_support": 5,
+  "limit": 10
+})
+```
+
+Then analyze a candidate scaffold and project one or more exit vectors:
+
+```json
+analyze_prism_scaffold({
+  "session_id": "project1",
+  "row_set_id": "all",
+  "discovery_id": "scaffold_discovery_1",
+  "candidate_id": "scaffold_1",
+  "scaffold_analysis_id": "series_scaffold_1"
+})
+
+get_prism_scaffold_projection({
+  "scaffold_analysis_id": "series_scaffold_1",
+  "scaffold_atoms": [0, 4],
+  "column_ids": ["primary_pIC50", "LipE"],
+  "limit": 25
+})
+```
+
+The projection returns bucket keys, counts, representative row IDs, substituent labels, and optional
+column summaries. Use `create_prism_scaffold_bucket_row_set` for a bucket that should become a
+reusable row set.
 
 Example prompt for Kiro:
 

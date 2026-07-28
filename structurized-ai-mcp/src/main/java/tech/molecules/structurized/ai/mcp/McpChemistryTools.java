@@ -81,6 +81,7 @@ final class McpChemistryTools {
     private final McpToolOutputSupport output;
     private final StructureComparisonMcpTool comparisonTools;
     private final PrismGraphMcpTool graphTools;
+    private final ScaffoldSarMcpTool scaffoldSarTools;
     private final SelectionAiService selections;
     private final SimilarityClusteringAiService clusterings;
     private final DecompositionAiService decompositions;
@@ -98,6 +99,7 @@ final class McpChemistryTools {
         this.output = new McpToolOutputSupport(artifacts);
         this.comparisonTools = new StructureComparisonMcpTool(this.repositories, this.prism);
         this.graphTools = new PrismGraphMcpTool(this.prism, this.artifacts, this.output);
+        this.scaffoldSarTools = new ScaffoldSarMcpTool(this.prism, this.artifacts, this.output);
         this.selections = new SelectionAiService(repositories);
         this.clusterings = new SimilarityClusteringAiService(repositories);
         this.decompositions = new DecompositionAiService(repositories);
@@ -155,7 +157,7 @@ final class McpChemistryTools {
                 prop("artifact_id", "string", "Artifact ID returned by a file-output tool.")),
                 args -> artifacts.getArtifact(requiredString(args, "artifact_id")));
         add(result, "get_structurized_tool_guide", "Returns concise workflow and semantics guidance for using Structurized MCP tools.", schema(
-                prop("topic", "string", "overview, payload_hygiene, prism_workflow, clustering_workflow, decomposition_rules, or artifact_output.")),
+                prop("topic", "string", "overview, payload_hygiene, prism_workflow, clustering_workflow, mmp_graph_workflow, scaffold_sar_workflow, decomposition_rules, or artifact_output.")),
                 this::toolGuide);
         add(result, "get_repository_info", "Returns metadata for one repository.", schema(required("repository_id"), prop("repository_id", "string", "Repository ID.")),
                 args -> repository(requiredString(args, "repository_id")));
@@ -572,6 +574,73 @@ final class McpChemistryTools {
                         optionalString(args, "row_set_id", null),
                         optionalString(args, "name", null),
                         optionalString(args, "description", null))));
+        add(result, "discover_prism_scaffolds", "Mines compact scaffold candidates from a managed Prism row set and stores a discovery handle for drill-down.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Prism row set ID. Defaults to all."),
+                prop("discovery_id", "string", "Optional reusable scaffold discovery ID."),
+                prop("neighbor_count", "integer", "Nearest-neighbor count for scaffold discovery. Defaults to 4."),
+                prop("min_neighbor_similarity", "number", "Minimum FFP512 neighbor similarity. Defaults to 0.15."),
+                prop("max_seeds", "integer", "Maximum discovery seeds. Defaults to all rows."),
+                prop("min_scaffold_heavy_atoms", "integer", "Minimum scaffold heavy atoms. Defaults to 5."),
+                prop("min_support", "integer", "Minimum candidate support. Defaults to 2."),
+                prop("offset", "integer", "Zero-based candidate offset."),
+                prop("limit", "integer", "Maximum candidates returned. Defaults to 20."),
+                prop("example_limit", "integer", "Maximum example row IDs per candidate. Defaults to 3."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                scaffoldSarTools::discoverPrismScaffolds);
+        add(result, "analyze_prism_scaffold", "Analyzes one scaffold against a Prism row set and stores a scaffold-analysis handle with exit-vector substituent summaries.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Prism row set ID. Defaults to all."),
+                prop("scaffold_smiles", "string", "Direct scaffold SMILES. Required unless discovery_id/candidate_id is supplied."),
+                prop("discovery_id", "string", "Stored scaffold discovery ID."),
+                prop("candidate_id", "string", "Candidate ID from discover_prism_scaffolds, e.g. scaffold_1."),
+                prop("scaffold_analysis_id", "string", "Optional reusable scaffold analysis ID."),
+                prop("context_radius", "integer", "Context radius for scaffold-to-compound splitting. Defaults to 1."),
+                prop("top_substituent_limit", "integer", "Top buckets returned per observed exit vector. Defaults to 5."),
+                prop("example_limit", "integer", "Maximum example row IDs per bucket. Defaults to 3."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                scaffoldSarTools::analyzePrismScaffold);
+        add(result, "get_prism_scaffold_projection", "Returns compact 1D/2D/n-dimensional scaffold substituent buckets with optional Prism column summaries.", schema(
+                required("scaffold_analysis_id", "scaffold_atoms"),
+                prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
+                arrayProp("scaffold_atoms", "integer", "Zero-based scaffold atom indices defining the projection dimensions."),
+                prop("offset", "integer", "Zero-based bucket offset."),
+                prop("limit", "integer", "Maximum buckets returned. Defaults to 50."),
+                prop("example_limit", "integer", "Maximum example row IDs per bucket. Defaults to 3."),
+                arrayProp("column_ids", "string", "Optional Prism runtime columns summarized for each returned bucket."),
+                prop("threshold", "number", "Optional numeric threshold for hit counts/rates in column summaries."),
+                prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
+                prop("top_values_limit", "integer", "Top categorical values per column summary. Defaults to 5."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                scaffoldSarTools::getPrismScaffoldProjection);
+        add(result, "create_prism_scaffold_bucket_row_set", "Creates a Prism row set from a scaffold projection bucket key returned by get_prism_scaffold_projection.", schema(
+                required("scaffold_analysis_id", "scaffold_atoms", "bucket_key"),
+                prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
+                arrayProp("scaffold_atoms", "integer", "The same zero-based scaffold atom indices used to create the projection."),
+                prop("bucket_key", "string", "Bucket key returned by get_prism_scaffold_projection."),
+                prop("row_set_id", "string", "Optional output row set ID."),
+                prop("name", "string", "Optional row set name."),
+                prop("description", "string", "Optional row set description.")),
+                scaffoldSarTools::createPrismScaffoldBucketRowSet);
+        add(result, "export_prism_scaffold_projection", "Writes a full scaffold projection bucket table as a TSV artifact; rows are never returned inline.", schema(
+                required("scaffold_analysis_id", "scaffold_atoms"),
+                prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
+                arrayProp("scaffold_atoms", "integer", "Zero-based scaffold atom indices defining the projection dimensions."),
+                prop("example_limit", "integer", "Maximum example row IDs included in the TSV. Defaults to 3."),
+                prop("output_name", "string", "Optional relative TSV artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact.")),
+                scaffoldSarTools::exportPrismScaffoldProjection);
         add(result, "mine_prism_mmp_graph", "Mines a matched molecular pair network from a Prism structure column and publishes it as a Prism row graph.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -1005,7 +1074,7 @@ final class McpChemistryTools {
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
                     Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns or mine_prism_mmp_graph -> analyze_prism_graph/inspect_prism_graph_neighborhood for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
-                    Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths. Use topic:mmp_graph_workflow for MMP graph strategy.
+                    Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths. Use topic:mmp_graph_workflow and topic:scaffold_sar_workflow for graph and scaffold SAR strategies.
                     """;
             case "payload_hygiene" -> """
                     # Payload Hygiene
@@ -1032,6 +1101,13 @@ final class McpChemistryTools {
                     Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
                     Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.
                     Use create_prism_graph_neighborhood_row_set to turn a center-row neighborhood into a reusable Prism row set, then summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
+                    """;
+            case "scaffold_sar_workflow" -> """
+                    # Scaffold SAR Workflow
+                    Use discover_prism_scaffolds on a managed Prism row set to get compact scaffold candidates with support, scaffold SMILES, observed exit vectors, and example rows. Then call analyze_prism_scaffold with either scaffold_smiles or discovery_id/candidate_id to create a reusable scaffold_analysis_id.
+                    Use get_prism_scaffold_projection with scaffold_atoms:[atom] for 1D R-group counts, two atoms for a sparse 2D matrix, or more atoms for top n-dimensional substituent combinations. Add column_ids to get Prism column summaries per returned bucket without creating temporary row sets.
+                    Use create_prism_scaffold_bucket_row_set only when a bucket/cell should become a reusable Prism row set for follow-up summaries, graph mining, or export. Use export_prism_scaffold_projection for full TSV projection tables outside the MCP context.
+                    Scaffold atom indices are zero-based and refer to the scaffold template atom order returned in observed exit-vector summaries.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules
