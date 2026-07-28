@@ -281,7 +281,7 @@ class InMemoryPrismBridgeServiceTest {
                 "mmp_demo", "mmp_network", "TOLUENE", 10);
         PrismRowSetSummary rowSet = ctx.prism.createGraphNeighborhoodRowSet(
                 new CreatePrismGraphNeighborhoodRowSetRequest(
-                        "mmp_demo", "mmp_network", "TOLUENE", 1, true,
+                        "mmp_demo", "mmp_network", "TOLUENE", 1, true, false, null,
                         "toluene_mmp_neighbors", null, null));
 
         assertEquals("mmp_network", mined.graph().graphId());
@@ -398,7 +398,7 @@ class InMemoryPrismBridgeServiceTest {
 
         PrismRowSetSummary radiusWithCenter = ctx.prism.createGraphNeighborhoodRowSet(
                 new CreatePrismGraphNeighborhoodRowSetRequest(
-                        "chain_demo", "chain_graph", "A", 2, true,
+                        "chain_demo", "chain_graph", "A", 2, true, false, null,
                         "a_radius_2", null, null));
         PrismRowSetMembersView withCenterMembers = ctx.prism.getRowSetMembers("chain_demo", "a_radius_2", 0, 10);
         assertEquals(3, radiusWithCenter.rowCount());
@@ -408,15 +408,43 @@ class InMemoryPrismBridgeServiceTest {
 
         PrismRowSetSummary radiusWithoutCenter = ctx.prism.createGraphNeighborhoodRowSet(
                 new CreatePrismGraphNeighborhoodRowSetRequest(
-                        "chain_demo", "chain_graph", "A", 2, false,
+                        "chain_demo", "chain_graph", "A", 2, false, false, null,
                         "a_radius_2_no_center", null, null));
         PrismRowSetMembersView withoutCenterMembers = ctx.prism.getRowSetMembers("chain_demo", "a_radius_2_no_center", 0, 10);
         assertEquals(2, radiusWithoutCenter.rowCount());
         assertEquals(List.of("B", "C"), withoutCenterMembers.members().stream().map(PrismRowMember::rowId).toList());
+        assertFalse(radiusWithCenter.provenance().containsKey("shellGroupingId"));
+
+        PrismRowSetSummary radiusWithShells = ctx.prism.createGraphNeighborhoodRowSet(
+                new CreatePrismGraphNeighborhoodRowSetRequest(
+                        "chain_demo", "chain_graph", "A", 3, true, true, "a_radius_3_shells",
+                        "a_radius_3", null, null));
+        PrismGroupingView shellGrouping = ctx.prism.getGrouping("chain_demo", "a_radius_3_shells", 0, 10);
+        PrismRowSetSummary shellTwoRows = ctx.prism.createGroupRowSet(new CreatePrismGroupRowSetRequest(
+                "chain_demo", "a_radius_3_shells", "shell_2", "a_radius_3_shell_2", null, null));
+        PrismRowSetMembersView shellTwoMembers = ctx.prism.getRowSetMembers("chain_demo", "a_radius_3_shell_2", 0, 10);
+        assertEquals(4, radiusWithShells.rowCount());
+        assertEquals("a_radius_3_shells", radiusWithShells.provenance().get("shellGroupingId"));
+        assertEquals("a_radius_3", shellGrouping.summary().sourceRowSetId());
+        assertEquals(List.of("shell_0", "shell_1", "shell_2", "shell_3"),
+                shellGrouping.groups().stream().map(PrismGroupSummary::groupId).toList());
+        assertEquals(List.of(1, 1, 1, 1),
+                shellGrouping.groups().stream().map(PrismGroupSummary::memberCount).toList());
+        assertEquals(1, shellTwoRows.rowCount());
+        assertEquals(List.of("C"), shellTwoMembers.members().stream().map(PrismRowMember::rowId).toList());
+
+        PrismRowSetSummary radiusWithoutCenterShells = ctx.prism.createGraphNeighborhoodRowSet(
+                new CreatePrismGraphNeighborhoodRowSetRequest(
+                        "chain_demo", "chain_graph", "A", 3, false, true, "a_radius_3_no_center_shells",
+                        "a_radius_3_no_center", null, null));
+        PrismGroupingView noCenterShellGrouping = ctx.prism.getGrouping("chain_demo", "a_radius_3_no_center_shells", 0, 10);
+        assertEquals(3, radiusWithoutCenterShells.rowCount());
+        assertEquals(List.of("shell_1", "shell_2", "shell_3"),
+                noCenterShellGrouping.groups().stream().map(PrismGroupSummary::groupId).toList());
 
         ChemOperationException invalidDepth = assertThrows(ChemOperationException.class,
                 () -> ctx.prism.createGraphNeighborhoodRowSet(new CreatePrismGraphNeighborhoodRowSetRequest(
-                        "chain_demo", "chain_graph", "A", 0, true,
+                        "chain_demo", "chain_graph", "A", 0, true, false, null,
                         "bad_radius", null, null)));
         assertEquals("invalid_graph_neighborhood_depth", invalidDepth.code());
     }

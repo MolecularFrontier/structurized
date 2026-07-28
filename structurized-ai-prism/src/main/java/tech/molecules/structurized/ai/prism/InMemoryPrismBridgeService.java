@@ -13,10 +13,13 @@ import tech.molecules.structurized.prism.engine.PrismColumnType;
 import tech.molecules.structurized.prism.engine.PrismEvaluationContext;
 import tech.molecules.structurized.prism.engine.PrismFilter;
 import tech.molecules.structurized.prism.engine.PrismGroup;
+import tech.molecules.structurized.prism.engine.PrismGroupMembership;
 import tech.molecules.structurized.prism.engine.PrismGrouping;
+import tech.molecules.structurized.prism.engine.PrismGroupingMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeDocument;
 import tech.molecules.structurized.prism.engine.PrismMoleculeDocumentMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeList;
+import tech.molecules.structurized.prism.engine.PrismOperationResult;
 import tech.molecules.structurized.prism.engine.PrismColumnSchema;
 import tech.molecules.structurized.prism.engine.PrismRowGraph;
 import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
@@ -558,16 +561,30 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         if (maxDepth < 1) {
             throw new ChemOperationException("invalid_graph_neighborhood_depth", "max_depth must be at least 1.");
         }
-        LinkedHashSet<String> rowIds = graphRadiusRowIds(graph, centerRowId, maxDepth);
+        LinkedHashMap<String, Integer> distances = graphRadiusDistances(graph, centerRowId, maxDepth);
         if (!request.includeCenter()) {
-            rowIds.remove(centerRowId);
+            distances.remove(centerRowId);
         }
-        if (rowIds.isEmpty()) {
+        if (distances.isEmpty()) {
             throw new ChemOperationException("empty_graph_neighborhood", "Graph neighborhood contains no rows.");
         }
+        LinkedHashSet<String> rowIds = new LinkedHashSet<>(distances.keySet());
         String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
                 ? generatedRowSetId(session, graph.id().replaceAll("[^a-zA-Z0-9_]+", "_") + "_neighborhood")
                 : request.rowSetId().trim();
+        String shellGroupingId = null;
+        LinkedHashMap<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put("source", "prism_row_graph_neighborhood");
+        provenance.put("graphId", graph.id());
+        provenance.put("centerRowId", centerRowId);
+        provenance.put("maxDepth", maxDepth);
+        provenance.put("includeCenter", request.includeCenter());
+        if (request.createShellGrouping()) {
+            shellGroupingId = request.shellGroupingId() == null || request.shellGroupingId().isBlank()
+                    ? rowSetId + "_shells"
+                    : normalizeId(request.shellGroupingId(), "shellGroupingId");
+            provenance.put("shellGroupingId", shellGroupingId);
+        }
         PrismRowSet rowSet = new PrismRowSet(
                 rowSetId,
                 request.name() == null || request.name().isBlank()
@@ -577,14 +594,20 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                         ? "Rows within graph distance " + maxDepth + " of " + centerRowId + " in graph " + graph.id() + "."
                         : request.description().trim(),
                 rowIds,
-                Map.of(
-                        "source", "prism_row_graph_neighborhood",
-                        "graphId", graph.id(),
-                        "centerRowId", centerRowId,
-                        "maxDepth", maxDepth,
-                        "includeCenter", request.includeCenter())
+                provenance
         );
-        session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
+        if (shellGroupingId == null) {
+            session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
+        } else {
+            PrismGrouping grouping = graphShellGrouping(shellGroupingId, graph, rowSet, centerRowId, maxDepth, distances);
+            session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().applyOperationResult(
+                    PrismOperationResult.builder()
+                            .addRowSet(rowSet)
+                            .addGrouping(grouping, false)
+                            .provenance("rowSetId", rowSet.id())
+                            .provenance("shellGroupingId", grouping.id())
+                            .build()));
+        }
         return rowSetSummary(session, rowSet);
     }
 
@@ -614,31 +637,82 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return new PrismGraphDegreeStats(min, median, max);
     }
 
-    private static LinkedHashSet<String> graphRadiusRowIds(PrismRowGraph graph, String centerRowId, int maxDepth) {
-        LinkedHashSet<String> rowIds = new LinkedHashSet<>();
+    private static LinkedHashMap<String, Integer> graphRadiusDistances(PrismRowGraph graph, String centerRowId, int maxDepth) {
+        LinkedHashMap<String, Integer> distances = new LinkedHashMap<>();
         if (!graph.rowIds().contains(centerRowId)) {
-            return rowIds;
+            return distances;
         }
         ArrayDeque<String> queue = new ArrayDeque<>();
-        Map<String, Integer> depth = new HashMap<>();
+        distances.put(centerRowId, 0);
         queue.add(centerRowId);
-        depth.put(centerRowId, 0);
         while (!queue.isEmpty()) {
             String current = queue.removeFirst();
-            int currentDepth = depth.get(current);
-            rowIds.add(current);
+            int currentDepth = distances.get(current);
             if (currentDepth >= maxDepth) {
                 continue;
             }
             for (String neighbor : graph.neighborRowIds(current).stream().sorted().toList()) {
-                if (depth.containsKey(neighbor)) {
+                if (distances.containsKey(neighbor)) {
                     continue;
                 }
-                depth.put(neighbor, currentDepth + 1);
+                distances.put(neighbor, currentDepth + 1);
                 queue.addLast(neighbor);
             }
         }
-        return rowIds;
+        return distances;
+    }
+
+    private static PrismGrouping graphShellGrouping(String groupingId,
+                                                    PrismRowGraph graph,
+                                                    PrismRowSet rowSet,
+                                                    String centerRowId,
+                                                    int maxDepth,
+                                                    LinkedHashMap<String, Integer> distances) {
+        LinkedHashMap<Integer, List<String>> rowsByShell = new LinkedHashMap<>();
+        for (Map.Entry<String, Integer> entry : distances.entrySet()) {
+            rowsByShell.computeIfAbsent(entry.getValue(), ignored -> new ArrayList<>()).add(entry.getKey());
+        }
+        List<PrismGroup> groups = new ArrayList<>();
+        List<PrismGroupMembership> memberships = new ArrayList<>();
+        for (Map.Entry<Integer, List<String>> entry : rowsByShell.entrySet()) {
+            int distance = entry.getKey();
+            List<String> shellRows = entry.getValue();
+            String groupId = "shell_" + distance;
+            String label = distance == 1 ? "1 hop" : distance + " hops";
+            groups.add(new PrismGroup(
+                    groupId,
+                    label,
+                    "Rows at graph distance " + distance + " from " + centerRowId + " in graph " + graph.id() + ".",
+                    null,
+                    shellRows.getFirst(),
+                    Map.of("distance", distance, "rowCount", shellRows.size())
+            ));
+            for (String rowId : shellRows) {
+                memberships.add(new PrismGroupMembership(
+                        rowId,
+                        groupId,
+                        1.0,
+                        distance == 0 ? "center" : "member",
+                        Map.of("distance", distance)
+                ));
+            }
+        }
+        return new PrismGrouping(
+                groupingId,
+                rowSet.name() + " shells",
+                "Exclusive graph-distance shells for row set " + rowSet.id() + ".",
+                rowSet.id(),
+                PrismGroupingMode.EXCLUSIVE,
+                groups,
+                memberships,
+                groupingId + ".shell",
+                Map.of(
+                        "source", "prism_row_graph_neighborhood_shells",
+                        "graphId", graph.id(),
+                        "centerRowId", centerRowId,
+                        "maxDepth", maxDepth,
+                        "rowSetId", rowSet.id())
+        );
     }
 
     private static PrismGraphTsvExport exportGraphEdges(ManagedPrismSession session, PrismRowGraph graph) {

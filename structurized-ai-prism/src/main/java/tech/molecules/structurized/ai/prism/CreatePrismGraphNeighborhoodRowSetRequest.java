@@ -6,6 +6,8 @@ public record CreatePrismGraphNeighborhoodRowSetRequest(
         String centerRowId,
         int maxDepth,
         boolean includeCenter,
+        boolean createShellGrouping,
+        String shellGroupingId,
         String rowSetId,
         String name,
         String description

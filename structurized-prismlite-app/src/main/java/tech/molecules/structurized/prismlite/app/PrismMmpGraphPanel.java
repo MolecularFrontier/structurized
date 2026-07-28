@@ -245,7 +245,7 @@ final class PrismMmpGraphPanel extends JPanel {
         }
         try {
             PrismRowSetSummary rowSet = bridge.createGraphNeighborhoodRowSet(new CreatePrismGraphNeighborhoodRowSetRequest(
-                    sessionId, graph.graph().graphId(), rowId, 1, true, null, null, null));
+                    sessionId, graph.graph().graphId(), rowId, 1, true, false, null, null, null, null));
             refreshLists();
             refreshWorkspace.run();
             status.setText("Created row set " + rowSet.rowSetId() + " with " + rowSet.rowCount() + " rows.");
