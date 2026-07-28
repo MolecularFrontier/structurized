@@ -9,6 +9,9 @@ import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryServ
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
 import tech.molecules.structurized.ai.search.OclStructureSearchService;
 import tech.molecules.structurized.ai.search.StructureSearchService;
+import tech.molecules.structurized.prism.engine.PrismOperationResult;
+import tech.molecules.structurized.prism.engine.PrismRowGraph;
+import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
 import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.result.NumericResult;
 
@@ -16,6 +19,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -319,6 +323,54 @@ class InMemoryPrismBridgeServiceTest {
     }
 
     @Test
+    void graphShortestPathHonorsDepthBeyondTwoAndMissReasons() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(chainGraphDataset(), "chain_demo", "Chain graph demo"));
+        ManagedPrismSession managed = ctx.registry.require("chain_demo");
+        PrismRowGraph graph = new PrismRowGraph(
+                "chain_graph",
+                "Chain graph",
+                "Synthetic graph for shortest-path tests.",
+                "test.chain",
+                "test",
+                1,
+                true,
+                "all",
+                List.of(
+                        chainEdge("e-ab", "A", "B"),
+                        chainEdge("e-bc", "B", "C"),
+                        chainEdge("e-cd", "C", "D"),
+                        chainEdge("e-de", "D", "E"),
+                        chainEdge("e-xy", "X", "Y")
+                ),
+                Map.of(),
+                Map.of());
+        managed.runAs(ManagedPrismSessionChangeOrigin.MCP,
+                () -> managed.workspace().applyOperationResult(PrismOperationResult.builder().addGraph(graph).build()));
+
+        PrismGraphShortestPath fullPath = ctx.prism.findGraphShortestPath(
+                "chain_demo", "chain_graph", "A", "E", true, 0, 2);
+        assertTrue(fullPath.connected());
+        assertEquals(4, fullPath.distance());
+        assertEquals(4, fullPath.searchedDepth());
+        assertEquals("connected", fullPath.reason());
+        assertEquals(List.of("A", "B", "C", "D", "E"), fullPath.pathRows().stream().map(PrismRowMember::rowId).toList());
+        assertEquals(4, fullPath.steps().size());
+
+        PrismGraphShortestPath capped = ctx.prism.findGraphShortestPath(
+                "chain_demo", "chain_graph", "A", "E", false, 2, 2);
+        assertFalse(capped.connected());
+        assertEquals(2, capped.searchedDepth());
+        assertEquals("max_depth_exceeded", capped.reason());
+
+        PrismGraphShortestPath disconnected = ctx.prism.findGraphShortestPath(
+                "chain_demo", "chain_graph", "A", "X", false, 12, 2);
+        assertFalse(disconnected.connected());
+        assertEquals(4, disconnected.searchedDepth());
+        assertEquals("no_path", disconnected.reason());
+    }
+
+    @Test
     void evaluatesPredictionsAsSessionArtifactsAndColumns() throws Exception {
         TestContext ctx = context();
         ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "prediction_demo", "Prediction demo"));
@@ -510,6 +562,43 @@ class InMemoryPrismBridgeServiceTest {
                 ""
         ));
         return dir;
+    }
+
+    private Path chainGraphDataset() throws Exception {
+        Path dir = tempDir.resolve("chain-graph-prism-tsv");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("endpoints.prism.tsv"), String.join("\n",
+                "endpoint_id\tname\tpath\tdatatype\tendpoint_type\tevaluation_mode\tunit\tscale\tdomain_lower_bound\tdomain_upper_bound\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subjects.prism.tsv"), String.join("\n",
+                "subject_id\tstructure_id\tbatch_id\tproject\tseries\tsmiles",
+                "A\tS-A\tB-001\tDemo\tChain\tC",
+                "B\tS-B\tB-002\tDemo\tChain\tCC",
+                "C\tS-C\tB-003\tDemo\tChain\tCCC",
+                "D\tS-D\tB-004\tDemo\tChain\tCCCC",
+                "E\tS-E\tB-005\tDemo\tChain\tCCCCC",
+                "X\tS-X\tB-006\tDemo\tOther\tO",
+                "Y\tS-Y\tB-007\tDemo\tOther\tCO",
+                ""
+        ));
+        Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
+                "subject_id\tendpoint_id\tstate\tmean\tn\traw_values",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
+                "subject_set_id\tname\tset_type\tsubject_set_scope\tparent_set_id\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_set_memberships.prism.tsv"), String.join("\n",
+                "subject_set_id\tsubject_id",
+                ""
+        ));
+        return dir;
+    }
+
+    private static PrismRowGraphEdge chainEdge(String edgeId, String sourceRowId, String targetRowId) {
+        return new PrismRowGraphEdge(edgeId, sourceRowId, targetRowId, sourceRowId + " -> " + targetRowId, Map.of());
     }
 
     private Path mmpDataset() throws Exception {

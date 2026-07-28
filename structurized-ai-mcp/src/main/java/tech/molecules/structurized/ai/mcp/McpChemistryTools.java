@@ -525,13 +525,14 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 graphTools::inspectPrismGraphNeighborhood);
-        add(result, "find_prism_graph_shortest_path", "Checks whether two Prism rows are connected in a row graph and returns graph-hop distance; request include_path:true for one deterministic short path.", schema(
+        add(result, "find_prism_graph_shortest_path", "Checks whether two Prism rows are connected in a row graph and returns graph-hop distance. Defaults to output_mode:stats; use output_mode:compact with include_path:true for a readable path.", schema(
                 required("session_id", "graph_id", "source_row_id", "target_row_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("graph_id", "string", "Prism row graph ID."),
                 prop("source_row_id", "string", "Start Prism row ID."),
                 prop("target_row_id", "string", "Target Prism row ID."),
-                prop("include_path", "boolean", "Whether to include path rows and bounded readable transform examples. Defaults to false."),
+                prop("include_path", "boolean", "Whether to include path rows and bounded readable transform examples for compact/full output. Defaults to false."),
+                prop("output_mode", "string", "stats, compact, or full. Defaults to stats."),
                 prop("max_depth", "integer", "Optional maximum graph-hop depth. Omit or set 0 for unlimited BFS."),
                 prop("transform_example_limit", "integer", "Maximum readable transform examples per returned path step. Defaults to 2."),
                 prop("output_target", "string", "response or file. Defaults to response."),
@@ -1122,7 +1123,7 @@ final class McpChemistryTools {
                     # MMP Graph Workflow
                     Use mine_prism_mmp_graph on managed Prism sessions. Recommended default profile is max_cuts:1, min_transform_support:1, max_variable_heavy_atoms:16, max_variable_to_mol_heavy_atom_fraction:0.3; omit these arguments unless there is a specific reason to change them.
                     Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
-                    Use find_prism_graph_shortest_path for cheap questions like "are these compounds connected and how many MMP hops apart?" The default response returns only connectivity and distance; use include_path:true for one deterministic short path with bounded readable transform examples.
+                    Use find_prism_graph_shortest_path for cheap questions like "are these compounds connected and how many MMP hops apart?" It defaults to output_mode:stats for only connectivity and distance; use output_mode:compact with include_path:true for one deterministic short path with bounded readable transform examples. Reserve output_mode:full for debugging because it includes full row fields and graph metadata.
                     Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.
                     Use create_prism_graph_neighborhood_row_set to turn a center-row neighborhood into a reusable Prism row set, then summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
                     """;

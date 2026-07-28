@@ -8,9 +8,11 @@ import tech.molecules.structurized.ai.prism.PrismCollapsedGraphNeighborhood;
 import tech.molecules.structurized.ai.prism.PrismGraphAnalysis;
 import tech.molecules.structurized.ai.prism.PrismGraphEdgeView;
 import tech.molecules.structurized.ai.prism.PrismGraphNeighborhood;
+import tech.molecules.structurized.ai.prism.PrismGraphPathStep;
 import tech.molecules.structurized.ai.prism.PrismGraphShortestPath;
 import tech.molecules.structurized.ai.prism.PrismGraphTsvExport;
 import tech.molecules.structurized.ai.prism.PrismMmpTransformSummary;
+import tech.molecules.structurized.ai.prism.PrismMmpTransformText;
 
 import java.util.List;
 import java.util.Map;
@@ -78,14 +80,22 @@ final class PrismGraphMcpTool {
     }
 
     Object findPrismGraphShortestPath(ObjectNode args) {
+        String outputMode = normalizeGraphShortestPathOutputMode(optionalString(args, "output_mode", "stats"));
+        boolean includePath = optionalBoolean(args, "include_path", false);
         PrismGraphShortestPath response = prism.findGraphShortestPath(
                 requiredString(args, "session_id"),
                 requiredString(args, "graph_id"),
                 requiredString(args, "source_row_id"),
                 requiredString(args, "target_row_id"),
-                optionalBoolean(args, "include_path", false),
+                includePath,
                 Math.max(0, optionalInt(args, "max_depth", 0)),
                 Math.max(1, optionalInt(args, "transform_example_limit", 2)));
+        Object responsePayload = switch (outputMode) {
+            case "stats" -> compactShortestPath(response, outputMode, false);
+            case "compact" -> compactShortestPath(response, outputMode, includePath);
+            case "full" -> response;
+            default -> throw new IllegalStateException("Unexpected graph shortest path output mode: " + outputMode);
+        };
         return output.maybeFile(
                 args,
                 "find_prism_graph_shortest_path",
@@ -98,7 +108,8 @@ final class PrismGraphMcpTool {
                         response.connected(),
                         response.distance(),
                         response.steps().size()),
-                response.steps().size());
+                response.steps().size(),
+                responsePayload);
     }
 
     Object summarizePrismMmpTransforms(ObjectNode args) {
@@ -198,10 +209,53 @@ final class PrismGraphMcpTool {
                 propertyDouble(properties, "delta"));
     }
 
+    private static CompactPrismGraphShortestPath compactShortestPath(PrismGraphShortestPath path, String outputMode, boolean includePath) {
+        return new CompactPrismGraphShortestPath(
+                path.graph().sessionId(),
+                path.graph().graphId(),
+                path.source().rowId(),
+                path.target().rowId(),
+                path.connected(),
+                path.distance(),
+                path.searchedDepth(),
+                path.reason(),
+                outputMode,
+                includePath ? path.pathRows().stream()
+                        .map(row -> new CompactPrismGraphPathRow(row.rowId(), row.subjectId(), row.structureId(), row.smiles()))
+                        .toList() : List.of(),
+                includePath ? path.steps().stream().map(PrismGraphMcpTool::compactPathStep).toList() : List.of());
+    }
+
+    private static CompactPrismGraphPathStep compactPathStep(PrismGraphPathStep step) {
+        return new CompactPrismGraphPathStep(
+                step.fromRowId(),
+                step.toRowId(),
+                step.rawEdgeCount(),
+                step.exampleTransforms().stream().map(PrismGraphMcpTool::compactPathTransform).toList());
+    }
+
+    private static CompactPrismGraphPathTransform compactPathTransform(PrismMmpTransformText transform) {
+        return new CompactPrismGraphPathTransform(
+                transform.transformId(),
+                transform.transformText(),
+                transform.keyFragment(),
+                transform.fromFragment(),
+                transform.toFragment(),
+                transform.cutCount());
+    }
+
     private static String normalizeGraphNeighborhoodOutputMode(String value) {
         String normalized = value == null || value.isBlank() ? "stats" : value.trim().toLowerCase();
         if (!"stats".equals(normalized) && !"collapsed".equals(normalized) && !"compact".equals(normalized) && !"full".equals(normalized)) {
             throw new ChemOperationException("invalid_graph_neighborhood_output_mode", "output_mode must be stats, collapsed, compact, or full.");
+        }
+        return normalized;
+    }
+
+    private static String normalizeGraphShortestPathOutputMode(String value) {
+        String normalized = value == null || value.isBlank() ? "stats" : value.trim().toLowerCase();
+        if (!"stats".equals(normalized) && !"compact".equals(normalized) && !"full".equals(normalized)) {
+            throw new ChemOperationException("invalid_graph_shortest_path_output_mode", "output_mode must be stats, compact, or full.");
         }
         return normalized;
     }
@@ -328,6 +382,52 @@ final class PrismGraphMcpTool {
             String toFragment,
             Integer cutCount,
             Double delta
+    ) {}
+
+    private record CompactPrismGraphShortestPath(
+            String sessionId,
+            String graphId,
+            String sourceRowId,
+            String targetRowId,
+            boolean connected,
+            Integer distance,
+            int searchedDepth,
+            String reason,
+            String outputMode,
+            List<CompactPrismGraphPathRow> pathRows,
+            List<CompactPrismGraphPathStep> steps
+    ) {
+        private CompactPrismGraphShortestPath {
+            pathRows = pathRows == null ? List.of() : List.copyOf(pathRows);
+            steps = steps == null ? List.of() : List.copyOf(steps);
+        }
+    }
+
+    private record CompactPrismGraphPathRow(
+            String rowId,
+            String subjectId,
+            String structureId,
+            String smiles
+    ) {}
+
+    private record CompactPrismGraphPathStep(
+            String fromRowId,
+            String toRowId,
+            int rawEdgeCount,
+            List<CompactPrismGraphPathTransform> exampleTransforms
+    ) {
+        private CompactPrismGraphPathStep {
+            exampleTransforms = exampleTransforms == null ? List.of() : List.copyOf(exampleTransforms);
+        }
+    }
+
+    private record CompactPrismGraphPathTransform(
+            String transformId,
+            String transformText,
+            String keyFragment,
+            String fromFragment,
+            String toFragment,
+            Integer cutCount
     ) {}
 
     private record GraphNeighborhoodArtifactSummary(

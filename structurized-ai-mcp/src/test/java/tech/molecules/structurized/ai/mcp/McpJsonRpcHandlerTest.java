@@ -368,22 +368,41 @@ class McpJsonRpcHandlerTest {
         assertTrue(transforms.at("/result/structuredContent/transforms/0/medianDelta").isNumber());
 
         JsonNode distanceOnly = call(handler, request(57, "find_prism_graph_shortest_path", """
-                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE"}
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","max_depth":1}
                 """));
         assertTrue(distanceOnly.at("/result/structuredContent/connected").asBoolean());
         assertEquals(1, distanceOnly.at("/result/structuredContent/distance").asInt());
+        assertEquals("connected", distanceOnly.at("/result/structuredContent/reason").asText());
+        assertEquals("stats", distanceOnly.at("/result/structuredContent/outputMode").asText());
+        assertTrue(distanceOnly.at("/result/structuredContent/graph/metadata").isMissingNode());
+        assertTrue(distanceOnly.at("/result/structuredContent/source/fields").isMissingNode());
         assertEquals(0, distanceOnly.at("/result/structuredContent/pathRows").size());
         assertEquals(0, distanceOnly.at("/result/structuredContent/steps").size());
 
         JsonNode pathResult = call(handler, request(58, "find_prism_graph_shortest_path", """
-                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","include_path":true}
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","include_path":true,"output_mode":"compact"}
                 """));
         assertTrue(pathResult.at("/result/structuredContent/connected").asBoolean());
+        assertEquals("compact", pathResult.at("/result/structuredContent/outputMode").asText());
         assertEquals("TOLUENE", pathResult.at("/result/structuredContent/pathRows/0/rowId").asText());
         assertEquals("ETHYLBENZENE", pathResult.at("/result/structuredContent/pathRows/1/rowId").asText());
+        assertTrue(pathResult.at("/result/structuredContent/pathRows/0/fields").isMissingNode());
         assertEquals(1, pathResult.at("/result/structuredContent/steps").size());
         assertTrue(pathResult.at("/result/structuredContent/steps/0/rawEdgeCount").asInt() > 0);
         assertTrue(pathResult.at("/result/structuredContent/steps/0/exampleTransforms/0/transformText").isTextual());
+        assertTrue(pathResult.at("/result/structuredContent/steps/0/exampleTransforms/0/keyFragment").isTextual());
+
+        JsonNode fullPath = call(handler, request(59, "find_prism_graph_shortest_path", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","include_path":true,"output_mode":"full"}
+                """));
+        assertTrue(fullPath.at("/result/structuredContent/graph/metadata").isObject());
+        assertTrue(fullPath.at("/result/structuredContent/pathRows/0/fields").isObject());
+
+        JsonNode badPathMode = call(handler, request(60, "find_prism_graph_shortest_path", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","output_mode":"verbose"}
+                """));
+        assertTrue(badPathMode.at("/result/isError").asBoolean());
+        assertEquals("invalid_graph_shortest_path_output_mode", badPathMode.at("/result/structuredContent/code").asText());
 
         JsonNode full = call(handler, request(6, "inspect_prism_graph_neighborhood", """
                 {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","output_mode":"full","limit":1}

@@ -453,11 +453,15 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         depth.put(sourceId, 0);
         int searchedDepth = 0;
         boolean reached = false;
+        boolean depthLimitReached = false;
         while (!queue.isEmpty() && !reached) {
             String current = queue.removeFirst();
             int currentDepth = depth.get(current);
             searchedDepth = Math.max(searchedDepth, currentDepth);
             if (currentDepth >= depthLimit) {
+                if (safeMaxDepth > 0) {
+                    depthLimitReached = true;
+                }
                 continue;
             }
             for (String neighbor : graph.neighborRowIds(current).stream().sorted().toList()) {
@@ -475,7 +479,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             }
         }
         if (!reached) {
-            String reason = safeMaxDepth > 0 ? "max_depth_exceeded" : "no_path";
+            String reason = depthLimitReached ? "max_depth_exceeded" : "no_path";
             return new PrismGraphShortestPath(graphSummary(session, graph), source, target, false, null, searchedDepth, reason, List.of(), List.of());
         }
 
