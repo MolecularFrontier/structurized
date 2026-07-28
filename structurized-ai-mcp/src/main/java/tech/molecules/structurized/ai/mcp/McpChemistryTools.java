@@ -572,11 +572,12 @@ final class McpChemistryTools {
                 prop("output_name", "string", "Optional relative TSV artifact path inside the managed artifact directory."),
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact.")),
                 graphTools::exportPrismGraph);
-        add(result, "create_prism_graph_neighborhood_row_set", "Creates a Prism row set from rows connected to a center row in a row graph.", schema(
+        add(result, "create_prism_graph_neighborhood_row_set", "Creates a compact Prism row-set summary for rows within max_depth graph hops of a center row.", schema(
                 required("session_id", "graph_id", "center_row_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("graph_id", "string", "Prism row graph ID."),
                 prop("center_row_id", "string", "Center Prism row ID."),
+                prop("max_depth", "integer", "Maximum graph-hop radius. Defaults to 1 for direct neighbors."),
                 prop("include_center", "boolean", "Whether to include the center row. Defaults to true."),
                 prop("row_set_id", "string", "Optional output row set ID."),
                 prop("name", "string", "Optional row set name."),
@@ -585,6 +586,7 @@ final class McpChemistryTools {
                         requiredString(args, "session_id"),
                         requiredString(args, "graph_id"),
                         requiredString(args, "center_row_id"),
+                        optionalInt(args, "max_depth", 1),
                         optionalBoolean(args, "include_center", true),
                         optionalString(args, "row_set_id", null),
                         optionalString(args, "name", null),
@@ -1125,7 +1127,7 @@ final class McpChemistryTools {
                     Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
                     Use find_prism_graph_shortest_path for cheap questions like "are these compounds connected and how many MMP hops apart?" It defaults to output_mode:stats for only connectivity and distance; use output_mode:compact with include_path:true for one deterministic short path with bounded readable transform examples. Reserve output_mode:full for debugging because it includes full row fields and graph metadata.
                     Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.
-                    Use create_prism_graph_neighborhood_row_set to turn a center-row neighborhood into a reusable Prism row set, then summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
+                    Use create_prism_graph_neighborhood_row_set to turn graph-radius neighborhoods into reusable Prism row sets: max_depth:1 for direct analogs, max_depth:2 or 3 for broader local SAR clouds. Then call summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
                     """;
             case "scaffold_sar_workflow" -> """
                     # Scaffold SAR Workflow

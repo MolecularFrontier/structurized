@@ -551,9 +551,16 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         ManagedPrismSession session = session(request.sessionId());
         PrismRowGraph graph = graph(session, request.graphId());
         String centerRowId = normalizeId(request.centerRowId(), "centerRowId");
-        LinkedHashSet<String> rowIds = new LinkedHashSet<>(graph.neighborRowIds(centerRowId));
-        if (request.includeCenter()) {
-            rowIds.add(centerRowId);
+        if (session.workspace().physicalRowForRowId(centerRowId).isEmpty()) {
+            throw new ChemOperationException("prism_row_not_found", "Prism row " + centerRowId + " does not exist.");
+        }
+        int maxDepth = request.maxDepth();
+        if (maxDepth < 1) {
+            throw new ChemOperationException("invalid_graph_neighborhood_depth", "max_depth must be at least 1.");
+        }
+        LinkedHashSet<String> rowIds = graphRadiusRowIds(graph, centerRowId, maxDepth);
+        if (!request.includeCenter()) {
+            rowIds.remove(centerRowId);
         }
         if (rowIds.isEmpty()) {
             throw new ChemOperationException("empty_graph_neighborhood", "Graph neighborhood contains no rows.");
@@ -564,13 +571,18 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         PrismRowSet rowSet = new PrismRowSet(
                 rowSetId,
                 request.name() == null || request.name().isBlank()
-                        ? graph.title() + " neighborhood / " + centerRowId
+                        ? graph.title() + " neighborhood / " + centerRowId + " / depth " + maxDepth
                         : request.name().trim(),
                 request.description() == null || request.description().isBlank()
-                        ? "Rows connected to " + centerRowId + " in graph " + graph.id() + "."
+                        ? "Rows within graph distance " + maxDepth + " of " + centerRowId + " in graph " + graph.id() + "."
                         : request.description().trim(),
                 rowIds,
-                Map.of("source", "prism_row_graph_neighborhood", "graphId", graph.id(), "centerRowId", centerRowId)
+                Map.of(
+                        "source", "prism_row_graph_neighborhood",
+                        "graphId", graph.id(),
+                        "centerRowId", centerRowId,
+                        "maxDepth", maxDepth,
+                        "includeCenter", request.includeCenter())
         );
         session.runAs(ManagedPrismSessionChangeOrigin.MCP, () -> session.workspace().addRowSet(rowSet));
         return rowSetSummary(session, rowSet);
@@ -600,6 +612,33 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 ? degrees.get(size / 2)
                 : (degrees.get(size / 2 - 1) + degrees.get(size / 2)) / 2.0;
         return new PrismGraphDegreeStats(min, median, max);
+    }
+
+    private static LinkedHashSet<String> graphRadiusRowIds(PrismRowGraph graph, String centerRowId, int maxDepth) {
+        LinkedHashSet<String> rowIds = new LinkedHashSet<>();
+        if (!graph.rowIds().contains(centerRowId)) {
+            return rowIds;
+        }
+        ArrayDeque<String> queue = new ArrayDeque<>();
+        Map<String, Integer> depth = new HashMap<>();
+        queue.add(centerRowId);
+        depth.put(centerRowId, 0);
+        while (!queue.isEmpty()) {
+            String current = queue.removeFirst();
+            int currentDepth = depth.get(current);
+            rowIds.add(current);
+            if (currentDepth >= maxDepth) {
+                continue;
+            }
+            for (String neighbor : graph.neighborRowIds(current).stream().sorted().toList()) {
+                if (depth.containsKey(neighbor)) {
+                    continue;
+                }
+                depth.put(neighbor, currentDepth + 1);
+                queue.addLast(neighbor);
+            }
+        }
+        return rowIds;
     }
 
     private static PrismGraphTsvExport exportGraphEdges(ManagedPrismSession session, PrismRowGraph graph) {

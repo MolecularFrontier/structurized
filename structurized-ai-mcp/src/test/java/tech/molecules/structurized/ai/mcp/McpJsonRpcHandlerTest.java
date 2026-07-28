@@ -411,10 +411,11 @@ class McpJsonRpcHandlerTest {
         assertTrue(full.at("/result/structuredContent/neighbors/0/edges/0/properties/transformText").isTextual());
 
         JsonNode rowSet = call(handler, request(7, "create_prism_graph_neighborhood_row_set", """
-                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","row_set_id":"toluene_neighbors"}
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","max_depth":1,"row_set_id":"toluene_neighbors"}
                 """));
         assertEquals("toluene_neighbors", rowSet.at("/result/structuredContent/rowSetId").asText());
         assertEquals(2, rowSet.at("/result/structuredContent/rowCount").asInt());
+        assertEquals(1, rowSet.at("/result/structuredContent/provenance/maxDepth").asInt());
 
         JsonNode exported = call(handler, request(8, "export_prism_graph", """
                 {"session_id":"mmp_demo","graph_id":"mmp_network","format":"edges_tsv","output_name":"graphs/mmp_edges.tsv"}

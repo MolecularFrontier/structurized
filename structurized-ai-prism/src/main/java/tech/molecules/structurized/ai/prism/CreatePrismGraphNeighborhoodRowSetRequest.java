@@ -4,6 +4,7 @@ public record CreatePrismGraphNeighborhoodRowSetRequest(
         String sessionId,
         String graphId,
         String centerRowId,
+        int maxDepth,
         boolean includeCenter,
         String rowSetId,
         String name,
