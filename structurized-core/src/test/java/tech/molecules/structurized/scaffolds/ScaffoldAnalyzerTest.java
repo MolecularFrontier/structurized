@@ -81,6 +81,20 @@ class ScaffoldAnalyzerTest {
         assertEquals(0, display.getAtomicNo(7));
     }
 
+    @Test
+    void mappedBracketAtomsDoNotConstrainImplicitHydrogenMatching() throws Exception {
+        ScaffoldTemplate mappedTemplate = ScaffoldTemplate.create(parse("CN([N:1])C"));
+        ScaffoldTemplate unmappedTemplate = ScaffoldTemplate.create(parse("CN(N)C"));
+        StereoMolecule target = parse("CN(NC)C");
+
+        ScaffoldDecomposition mapped = ScaffoldAnalyzer.analyze(mappedTemplate, target, new ScaffoldAnalyzer.Config());
+        ScaffoldDecomposition unmapped = ScaffoldAnalyzer.analyze(unmappedTemplate, target, new ScaffoldAnalyzer.Config());
+
+        assertNull(mapped.failure);
+        assertNull(unmapped.failure);
+        assertEquals(unmapped.substitutionEvents.size(), mapped.substitutionEvents.size());
+    }
+
     private static StereoMolecule parse(String smiles) throws Exception {
         StereoMolecule molecule = new StereoMolecule();
         new SmilesParser().parse(molecule, smiles);

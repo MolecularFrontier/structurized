@@ -525,6 +525,20 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 graphTools::inspectPrismGraphNeighborhood);
+        add(result, "find_prism_graph_shortest_path", "Checks whether two Prism rows are connected in a row graph and returns graph-hop distance; request include_path:true for one deterministic short path.", schema(
+                required("session_id", "graph_id", "source_row_id", "target_row_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID."),
+                prop("source_row_id", "string", "Start Prism row ID."),
+                prop("target_row_id", "string", "Target Prism row ID."),
+                prop("include_path", "boolean", "Whether to include path rows and bounded readable transform examples. Defaults to false."),
+                prop("max_depth", "integer", "Optional maximum graph-hop depth. Omit or set 0 for unlimited BFS."),
+                prop("transform_example_limit", "integer", "Maximum readable transform examples per returned path step. Defaults to 2."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                graphTools::findPrismGraphShortestPath);
         add(result, "summarize_prism_mmp_transforms", "Ranks readable MMP transforms from an existing Prism MMP graph without returning raw edge lists. Use pIC50/LipE/selectivity value columns at mining time for meaningful deltas.", schema(
                 required("session_id", "graph_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -592,26 +606,31 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 scaffoldSarTools::discoverPrismScaffolds);
-        add(result, "analyze_prism_scaffold", "Analyzes one scaffold against a Prism row set and stores a scaffold-analysis handle with exit-vector substituent summaries.", schema(
+        add(result, "analyze_prism_scaffold", "Analyzes a concrete scaffold substructure against a Prism row set. Extra bonds leaving matched scaffold atoms become exit vectors; mapped atoms such as [cH:1] can be labeled with exit_atom_map_labels.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID. Defaults to all."),
-                prop("scaffold_smiles", "string", "Direct scaffold SMILES. Required unless discovery_id/candidate_id is supplied."),
+                prop("scaffold_smiles", "string", "Concrete scaffold SMILES substructure. Required unless discovery_id/candidate_id is supplied. Atom maps may label scaffold atoms, e.g. [cH:1]1ccc(N[C:2](=O)N)cc1."),
                 prop("discovery_id", "string", "Stored scaffold discovery ID."),
                 prop("candidate_id", "string", "Candidate ID from discover_prism_scaffolds, e.g. scaffold_1."),
                 prop("scaffold_analysis_id", "string", "Optional reusable scaffold analysis ID."),
+                prop("exit_atom_map_labels", "object", "Optional map from SMILES atom-map numbers to exit-vector labels, e.g. {\"1\":\"cap\",\"2\":\"tail\"}. Maps must be on actual scaffold atoms."),
+                prop("exit_atom_labels", "object", "Optional fallback map from zero-based scaffold atom indices to labels."),
+                prop("include_unmatched_buckets", "boolean", "Whether top bucket summaries include unmatched rows. Defaults to false; unmatchedCount remains reported."),
                 prop("context_radius", "integer", "Context radius for scaffold-to-compound splitting. Defaults to 1."),
                 prop("top_substituent_limit", "integer", "Top buckets returned per observed exit vector. Defaults to 5."),
-                prop("example_limit", "integer", "Maximum example row IDs per bucket. Defaults to 3."),
+                prop("example_limit", "integer", "Maximum example row IDs per bucket and match diagnostics. Defaults to 3."),
                 prop("output_target", "string", "response or file. Defaults to response."),
                 prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 scaffoldSarTools::analyzePrismScaffold);
-        add(result, "get_prism_scaffold_projection", "Returns compact 1D/2D/n-dimensional scaffold substituent buckets with optional Prism column summaries.", schema(
-                required("scaffold_analysis_id", "scaffold_atoms"),
+        add(result, "get_prism_scaffold_projection", "Returns compact 1D/2D/n-dimensional scaffold substituent buckets with optional Prism column summaries and matched-context diversity metadata.", schema(
+                required("scaffold_analysis_id"),
                 prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
                 arrayProp("scaffold_atoms", "integer", "Zero-based scaffold atom indices defining the projection dimensions."),
+                arrayProp("scaffold_atom_maps", "integer", "SMILES atom-map numbers defining the projection dimensions. If omitted and labeled mapped atoms exist, those labeled atoms are used."),
+                prop("include_unmatched_buckets", "boolean", "Whether projection rows include unmatched buckets. Defaults to false; suppressedUnmatchedBucketCount reports hidden rows."),
                 prop("offset", "integer", "Zero-based bucket offset."),
                 prop("limit", "integer", "Maximum buckets returned. Defaults to 50."),
                 prop("example_limit", "integer", "Maximum example row IDs per bucket. Defaults to 3."),
@@ -625,18 +644,22 @@ final class McpChemistryTools {
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 scaffoldSarTools::getPrismScaffoldProjection);
         add(result, "create_prism_scaffold_bucket_row_set", "Creates a Prism row set from a scaffold projection bucket key returned by get_prism_scaffold_projection.", schema(
-                required("scaffold_analysis_id", "scaffold_atoms", "bucket_key"),
+                required("scaffold_analysis_id", "bucket_key"),
                 prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
                 arrayProp("scaffold_atoms", "integer", "The same zero-based scaffold atom indices used to create the projection."),
+                arrayProp("scaffold_atom_maps", "integer", "The same SMILES atom-map numbers used to create the projection."),
+                prop("include_unmatched_buckets", "boolean", "Set true only for bucket keys containing unmatched rows."),
                 prop("bucket_key", "string", "Bucket key returned by get_prism_scaffold_projection."),
                 prop("row_set_id", "string", "Optional output row set ID."),
                 prop("name", "string", "Optional row set name."),
                 prop("description", "string", "Optional row set description.")),
                 scaffoldSarTools::createPrismScaffoldBucketRowSet);
         add(result, "export_prism_scaffold_projection", "Writes a full scaffold projection bucket table as a TSV artifact; rows are never returned inline.", schema(
-                required("scaffold_analysis_id", "scaffold_atoms"),
+                required("scaffold_analysis_id"),
                 prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
                 arrayProp("scaffold_atoms", "integer", "Zero-based scaffold atom indices defining the projection dimensions."),
+                arrayProp("scaffold_atom_maps", "integer", "SMILES atom-map numbers defining the projection dimensions."),
+                prop("include_unmatched_buckets", "boolean", "Whether TSV includes unmatched buckets. Defaults to false."),
                 prop("example_limit", "integer", "Maximum example row IDs included in the TSV. Defaults to 3."),
                 prop("output_name", "string", "Optional relative TSV artifact path inside the managed artifact directory."),
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact.")),
@@ -1099,15 +1122,20 @@ final class McpChemistryTools {
                     # MMP Graph Workflow
                     Use mine_prism_mmp_graph on managed Prism sessions. Recommended default profile is max_cuts:1, min_transform_support:1, max_variable_heavy_atoms:16, max_variable_to_mol_heavy_atom_fraction:0.3; omit these arguments unless there is a specific reason to change them.
                     Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
+                    Use find_prism_graph_shortest_path for cheap questions like "are these compounds connected and how many MMP hops apart?" The default response returns only connectivity and distance; use include_path:true for one deterministic short path with bounded readable transform examples.
                     Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.
                     Use create_prism_graph_neighborhood_row_set to turn a center-row neighborhood into a reusable Prism row set, then summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
                     """;
             case "scaffold_sar_workflow" -> """
                     # Scaffold SAR Workflow
-                    Use discover_prism_scaffolds on a managed Prism row set to get compact scaffold candidates with support, scaffold SMILES, observed exit vectors, and example rows. Then call analyze_prism_scaffold with either scaffold_smiles or discovery_id/candidate_id to create a reusable scaffold_analysis_id.
-                    Use get_prism_scaffold_projection with scaffold_atoms:[atom] for 1D R-group counts, two atoms for a sparse 2D matrix, or more atoms for top n-dimensional substituent combinations. Add column_ids to get Prism column summaries per returned bucket without creating temporary row sets.
-                    Use create_prism_scaffold_bucket_row_set only when a bucket/cell should become a reusable Prism row set for follow-up summaries, graph mining, or export. Use export_prism_scaffold_projection for full TSV projection tables outside the MCP context.
-                    Scaffold atom indices are zero-based and refer to the scaffold template atom order returned in observed exit-vector summaries.
+                    Start from a candidate scaffold_smiles returned by discover_prism_scaffolds, or hand-write a conserved core. Discovered cores are often fully elaborated; trim them toward the smallest conserved core that answers the SAR question to raise exit-vector support.
+                    Concepts: draw the conserved core, not dummy attachment points. scaffold_smiles is concrete substructure mode, not SMARTS; when the core matches inside a compound, extra bonds leaving matched scaffold atoms become exit vectors. Simple scaffold atoms may match more-substituted target atoms, and those extra bonds become R-groups.
+                    Stable labels: atom maps on actual scaffold atoms may label vectors, e.g. scaffold_smiles:"[cH:1]1ccc(N[C:2](=O)N)cc1", exit_atom_map_labels:{"1":"cap","2":"tail"}. Simple mapped atoms are normalized during matching so bracket-induced hydrogen/valence metadata does not constrain the query. scaffold_atom_maps:[1,2] and zero-based scaffold_atoms select the same positions.
+                    Matched-context recipe: 1) analyze_prism_scaffold with a small conserved core and exit_atom_map_labels. 2) get_prism_scaffold_projection(scaffold_atom_maps:[2], column_ids:[endpoint]) for a 1D trend; column_ids may list several endpoints to read potency, selectivity, and liabilities across the same buckets in one call. If row.context.cleanMatchedContext is false or diverseOtherPositionCount is high, treat the endpoint stat as marginal. 3) Add the co-varying position, e.g. scaffold_atom_maps:[1,2], to get a cap x tail matrix; cells with cleanMatchedContext:true are clean matched observations. 4) Promote a useful cell with create_prism_scaffold_bucket_row_set using the same scaffold_atom_maps/scaffold_atoms and bucket_key, then inspect MMP neighborhoods or summarize other endpoints.
+                    Interpretation: cleanMatchedContext=true means all other observed exit-vector positions are constant inside that bucket. otherPositionCount is the number of observed vectors outside the projection. diverseOtherPositionCount counts how many of those vary; diverseOtherPositions lists the main confounders.
+                    Buckets: none means the position is unsubstituted; multi means multiple or ambiguous attachments at that scaffold atom are reported jointly; unmatched means the scaffold did not match and is suppressed by default. Use include_unmatched_buckets:true only when needed.
+                    Zero-hit diagnosis: a hand scaffold must be a conserved substructure. Common causes are wrong ring size, protonation/aromaticity mismatch, over-specific caps, CF2/CF3 mismatch, or including atoms that are actually variable. Prefer the smallest conserved core that still defines the SAR question; smaller cores often give higher-support exit vectors.
+                    Export/follow-up: use export_prism_scaffold_projection for full TSV projection tables outside the MCP context.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules

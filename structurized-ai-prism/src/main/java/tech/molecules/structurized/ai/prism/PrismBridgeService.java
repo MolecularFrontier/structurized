@@ -43,6 +43,8 @@ public interface PrismBridgeService {
 
     PrismCollapsedGraphNeighborhood inspectCollapsedGraphNeighborhood(String sessionId, String graphId, String centerRowId, int limit, int transformExampleLimit);
 
+    PrismGraphShortestPath findGraphShortestPath(String sessionId, String graphId, String sourceRowId, String targetRowId, boolean includePath, int maxDepth, int transformExampleLimit);
+
     PrismMmpTransformSummary summarizeMmpTransforms(String sessionId, String graphId, int minSupport, String sortBy, int offset, int limit, int exampleLimit);
 
     PrismRowSetSummary createGraphNeighborhoodRowSet(CreatePrismGraphNeighborhoodRowSetRequest request);

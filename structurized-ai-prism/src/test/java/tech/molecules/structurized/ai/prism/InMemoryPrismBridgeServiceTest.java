@@ -291,6 +291,29 @@ class InMemoryPrismBridgeServiceTest {
         assertTrue(neighborhood.neighborCount() > 0);
         assertEquals("ETHYLBENZENE", neighborhood.neighbors().getFirst().row().rowId());
         assertFalse(neighborhood.neighbors().getFirst().edges().isEmpty());
+
+        PrismGraphShortestPath distanceOnly = ctx.prism.findGraphShortestPath(
+                "mmp_demo", "mmp_network", "TOLUENE", "ETHYLBENZENE", false, 0, 2);
+        assertTrue(distanceOnly.connected());
+        assertEquals(1, distanceOnly.distance());
+        assertEquals("connected", distanceOnly.reason());
+        assertTrue(distanceOnly.pathRows().isEmpty());
+        assertTrue(distanceOnly.steps().isEmpty());
+
+        PrismGraphShortestPath withPath = ctx.prism.findGraphShortestPath(
+                "mmp_demo", "mmp_network", "TOLUENE", "ETHYLBENZENE", true, 0, 2);
+        assertEquals(List.of("TOLUENE", "ETHYLBENZENE"), withPath.pathRows().stream().map(PrismRowMember::rowId).toList());
+        assertEquals(1, withPath.steps().size());
+        assertTrue(withPath.steps().getFirst().rawEdgeCount() > 0);
+        assertFalse(withPath.steps().getFirst().exampleTransforms().isEmpty());
+
+        PrismGraphShortestPath sameRow = ctx.prism.findGraphShortestPath(
+                "mmp_demo", "mmp_network", "TOLUENE", "TOLUENE", true, 0, 2);
+        assertTrue(sameRow.connected());
+        assertEquals(0, sameRow.distance());
+        assertEquals("same_row", sameRow.reason());
+        assertEquals(List.of("TOLUENE"), sameRow.pathRows().stream().map(PrismRowMember::rowId).toList());
+
         assertEquals(2, rowSet.rowCount());
         assertEquals("mmp_network", rowSet.provenance().get("graphId"));
     }

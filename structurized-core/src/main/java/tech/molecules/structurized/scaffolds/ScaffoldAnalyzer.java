@@ -35,7 +35,7 @@ public final class ScaffoldAnalyzer {
             cfg = new Config();
         }
 
-        StereoMolecule scaffold = new StereoMolecule(template.scaffold);
+        StereoMolecule scaffold = normalizedScaffoldCopy(template.scaffold);
         scaffold.ensureHelperArrays(Molecule.cHelperSymmetrySimple);
         StereoMolecule compoundCopy = new StereoMolecule(compound);
         compoundCopy.ensureHelperArrays(Molecule.cHelperSymmetrySimple);
@@ -74,6 +74,28 @@ public final class ScaffoldAnalyzer {
         }
 
         return new ScaffoldDecomposition(template, best.match, best.groups, best.events);
+    }
+
+    private static StereoMolecule normalizedScaffoldCopy(StereoMolecule source) {
+        StereoMolecule scaffold = new StereoMolecule(source);
+        for (int atom = 0; atom < scaffold.getAllAtoms(); atom++) {
+            if (scaffold.getAtomMapNo(atom) != 0) {
+                scaffold.setAtomMapNo(atom, 0, false);
+                if (isSimpleMappedAtom(scaffold, atom)) {
+                    scaffold.setAtomCustomLabel(atom, (byte[]) null);
+                    scaffold.setAtomAbnormalValence(atom, -1);
+                    scaffold.setAtomRadical(atom, Molecule.cAtomRadicalStateNone);
+                }
+            }
+        }
+        return scaffold;
+    }
+
+    private static boolean isSimpleMappedAtom(StereoMolecule molecule, int atom) {
+        return molecule.getAtomCharge(atom) == 0
+                && molecule.getAtomMass(atom) == 0
+                && molecule.getAtomList(atom) == null
+                && molecule.getAtomQueryFeatures(atom) == 0;
     }
 
     private static List<SubstitutionEvent> toSubstitutionEvents(

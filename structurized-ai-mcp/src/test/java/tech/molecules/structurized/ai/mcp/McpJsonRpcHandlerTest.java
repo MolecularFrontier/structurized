@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(93, tools.size());
+        assertEquals(94, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -93,6 +93,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "analyze_prism_graph"));
         assertTrue(hasTool(tools, "export_prism_graph"));
         assertTrue(hasTool(tools, "inspect_prism_graph_neighborhood"));
+        assertTrue(hasTool(tools, "find_prism_graph_shortest_path"));
         assertTrue(hasTool(tools, "summarize_prism_mmp_transforms"));
         assertTrue(hasTool(tools, "create_prism_graph_neighborhood_row_set"));
         assertTrue(hasTool(tools, "mine_prism_mmp_graph"));
@@ -124,6 +125,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "summarize_clusters_by_endpoint"));
         assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
         assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
+        assertTrue(toolDescription(tools, "analyze_prism_scaffold").contains("[cH:1]"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
     }
 
@@ -364,6 +366,24 @@ class McpJsonRpcHandlerTest {
         assertTrue(transforms.at("/result/structuredContent/transforms/0/transformText").isTextual());
         assertTrue(transforms.at("/result/structuredContent/transforms/0/supportCount").asInt() > 0);
         assertTrue(transforms.at("/result/structuredContent/transforms/0/medianDelta").isNumber());
+
+        JsonNode distanceOnly = call(handler, request(57, "find_prism_graph_shortest_path", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE"}
+                """));
+        assertTrue(distanceOnly.at("/result/structuredContent/connected").asBoolean());
+        assertEquals(1, distanceOnly.at("/result/structuredContent/distance").asInt());
+        assertEquals(0, distanceOnly.at("/result/structuredContent/pathRows").size());
+        assertEquals(0, distanceOnly.at("/result/structuredContent/steps").size());
+
+        JsonNode pathResult = call(handler, request(58, "find_prism_graph_shortest_path", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","source_row_id":"TOLUENE","target_row_id":"ETHYLBENZENE","include_path":true}
+                """));
+        assertTrue(pathResult.at("/result/structuredContent/connected").asBoolean());
+        assertEquals("TOLUENE", pathResult.at("/result/structuredContent/pathRows/0/rowId").asText());
+        assertEquals("ETHYLBENZENE", pathResult.at("/result/structuredContent/pathRows/1/rowId").asText());
+        assertEquals(1, pathResult.at("/result/structuredContent/steps").size());
+        assertTrue(pathResult.at("/result/structuredContent/steps/0/rawEdgeCount").asInt() > 0);
+        assertTrue(pathResult.at("/result/structuredContent/steps/0/exampleTransforms/0/transformText").isTextual());
 
         JsonNode full = call(handler, request(6, "inspect_prism_graph_neighborhood", """
                 {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","output_mode":"full","limit":1}
@@ -876,20 +896,26 @@ class McpJsonRpcHandlerTest {
         assertEquals(2, discovery.at("/result/structuredContent/candidates/0/supportCount").asInt());
 
         JsonNode analysis = call(handler, request(3, "analyze_prism_scaffold", """
-                {"session_id":"sar_demo","row_set_id":"all","scaffold_analysis_id":"benzene_sar","scaffold_smiles":"c1ccccc1","top_substituent_limit":5}
+                {"session_id":"sar_demo","row_set_id":"all","scaffold_analysis_id":"benzene_sar","scaffold_smiles":"[cH:1]1ccccc1","exit_atom_map_labels":{"1":"phenyl_exit"},"top_substituent_limit":5}
                 """));
         assertEquals("benzene_sar", analysis.at("/result/structuredContent/scaffoldAnalysisId").asText());
         assertEquals(2, analysis.at("/result/structuredContent/matchedCount").asInt());
+        assertTrue(analysis.at("/result/structuredContent/mappedScaffoldSmiles").asText().contains(":1"));
+        assertEquals("phenyl_exit", analysis.at("/result/structuredContent/exitAtomMapLabels/0/label").asText());
+        assertTrue(analysis.at("/result/structuredContent/matchedExampleRowIds").size() > 0);
         assertTrue(analysis.at("/result/structuredContent/observedExitVectorCount").asInt() >= 1);
-        int scaffoldAtom = analysis.at("/result/structuredContent/observedExitVectors/0/scaffoldAtom").asInt();
+        int scaffoldAtom = analysis.at("/result/structuredContent/exitAtomMapLabels/0/scaffoldAtom").asInt();
 
         JsonNode projection = call(handler, request(4, "get_prism_scaffold_projection", """
-                {"scaffold_analysis_id":"benzene_sar","scaffold_atoms":[SCAT],"column_ids":["pIC50"],"threshold":2.0,"limit":10,"example_limit":2}
-                """.replace("SCAT", Integer.toString(scaffoldAtom))));
+                {"scaffold_analysis_id":"benzene_sar","scaffold_atom_maps":[1],"column_ids":["pIC50"],"threshold":2.0,"limit":10,"example_limit":2}
+                """));
         assertEquals(1, projection.at("/result/structuredContent/dimension").asInt());
+        assertEquals("phenyl_exit", projection.at("/result/structuredContent/scaffoldExitVectors/0/label").asText());
+        assertTrue(projection.at("/result/structuredContent/suppressedUnmatchedBucketCount").canConvertToInt());
         assertTrue(projection.at("/result/structuredContent/totalBuckets").asInt() >= 1);
         String bucketKey = projection.at("/result/structuredContent/rows/0/bucketKey").asText();
         assertTrue(projection.at("/result/structuredContent/rows/0/count").asInt() >= 1);
+        assertTrue(projection.at("/result/structuredContent/rows/0/context/cleanMatchedContext").isBoolean());
         assertEquals("pIC50", projection.at("/result/structuredContent/rows/0/columnSummaries/0/columnId").asText());
         assertTrue(projection.at("/result/structuredContent/rows/0/columnSummaries/0/numeric/median").isNumber());
 
@@ -908,7 +934,14 @@ class McpJsonRpcHandlerTest {
         assertTrue(tsv.contains(bucketKey));
 
         JsonNode guide = call(handler, request(7, "get_structurized_tool_guide", "{\"topic\":\"scaffold_sar_workflow\"}"));
-        assertTrue(guide.at("/result/content/0/text").asText().contains("Scaffold SAR Workflow"));
+        String scaffoldGuide = guide.at("/result/content/0/text").asText();
+        assertTrue(scaffoldGuide.contains("Scaffold SAR Workflow"));
+        assertTrue(scaffoldGuide.contains("exit_atom_map_labels"));
+        assertTrue(scaffoldGuide.contains("cleanMatchedContext"));
+        assertTrue(scaffoldGuide.contains("create_prism_scaffold_bucket_row_set"));
+        assertTrue(scaffoldGuide.contains("discover_prism_scaffolds"));
+        assertTrue(scaffoldGuide.contains("several endpoints"));
+        assertTrue(scaffoldGuide.contains("Zero-hit diagnosis"));
     }
 
     @Test

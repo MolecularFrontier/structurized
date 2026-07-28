@@ -28,11 +28,13 @@ import tech.molecules.structurized.transforms.OclStrictMcsProvider;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -113,7 +115,9 @@ final class ScaffoldSarMcpTool {
         String rowSetId = optionalString(args, "row_set_id", "all");
         int topSubstituentLimit = safeLimit(args, "top_substituent_limit", 5);
         int exampleLimit = safeLimit(args, "example_limit", 3);
+        boolean includeUnmatchedBuckets = optionalBoolean(args, "include_unmatched_buckets", false);
         ScaffoldTemplate template = scaffoldTemplate(args);
+        Map<Integer, String> exitAtomLabels = exitAtomLabels(args, template);
         PrismRowSetStructureCollection structures = prism.rowSetStructures(sessionId, rowSetId);
         List<PreparedStructure> prepared = preparedStructures(structures);
         if (prepared.isEmpty()) {
@@ -130,9 +134,9 @@ final class ScaffoldSarMcpTool {
         if (analysisId == null || analysisId.isBlank()) {
             analysisId = "scaffold_analysis_" + analysisCounter.getAndIncrement();
         }
-        StoredAnalysis analysis = new StoredAnalysis(analysisId, sessionId, rowSetId, structures, prepared, dataset);
+        StoredAnalysis analysis = new StoredAnalysis(analysisId, sessionId, rowSetId, structures, prepared, dataset, exitAtomLabels);
         analyses.put(analysisId, analysis);
-        ScaffoldAnalysisView response = analysisView(analysis, topSubstituentLimit, exampleLimit);
+        ScaffoldAnalysisView response = analysisView(analysis, topSubstituentLimit, exampleLimit, includeUnmatchedBuckets);
         ScaffoldAnalysisArtifactSummary summary = new ScaffoldAnalysisArtifactSummary(
                 analysisId,
                 sessionId,
@@ -146,16 +150,17 @@ final class ScaffoldSarMcpTool {
 
     Object getPrismScaffoldProjection(ObjectNode args) {
         StoredAnalysis analysis = analysis(requiredString(args, "scaffold_analysis_id"));
-        List<Integer> atoms = scaffoldAtoms(args);
+        List<Integer> atoms = scaffoldAtoms(args, analysis);
         int offset = Math.max(0, optionalInt(args, "offset", 0));
         int limit = safeLimit(args, "limit", DEFAULT_LIMIT);
         int exampleLimit = safeLimit(args, "example_limit", 3);
+        boolean includeUnmatchedBuckets = optionalBoolean(args, "include_unmatched_buckets", false);
         List<String> columnIds = optionalStringList(args, "column_ids");
         Double threshold = optionalDouble(args, "threshold", null);
         String thresholdDirection = optionalString(args, "threshold_direction", "gte");
         int topValuesLimit = safeLimit(args, "top_values_limit", 5);
 
-        ProjectionBuild projection = projection(analysis, atoms);
+        ProjectionBuild projection = projection(analysis, atoms, includeUnmatchedBuckets);
         List<ScaffoldProjectionRow> page = projection.rows().stream()
                 .skip(offset)
                 .limit(limit)
@@ -167,7 +172,9 @@ final class ScaffoldSarMcpTool {
                 analysis.rowSetId(),
                 atoms.size(),
                 atoms,
+                exitVectorViews(analysis, atoms),
                 projection.totalRows(),
+                projection.suppressedUnmatchedRows(),
                 page.size(),
                 offset,
                 limit,
@@ -187,7 +194,7 @@ final class ScaffoldSarMcpTool {
     Object createPrismScaffoldBucketRowSet(ObjectNode args) {
         StoredAnalysis analysis = analysis(requiredString(args, "scaffold_analysis_id"));
         String bucketKey = requiredString(args, "bucket_key");
-        ProjectionBuild projection = projection(analysis, scaffoldAtoms(args));
+        ProjectionBuild projection = projection(analysis, scaffoldAtoms(args, analysis), optionalBoolean(args, "include_unmatched_buckets", false));
         ProjectionRow row = projection.rows().stream()
                 .filter(candidate -> bucketKey.equals(candidate.bucketKey()))
                 .findFirst()
@@ -204,24 +211,27 @@ final class ScaffoldSarMcpTool {
 
     Object exportPrismScaffoldProjection(ObjectNode args) {
         StoredAnalysis analysis = analysis(requiredString(args, "scaffold_analysis_id"));
-        List<Integer> atoms = scaffoldAtoms(args);
-        ProjectionBuild projection = projection(analysis, atoms);
+        List<Integer> atoms = scaffoldAtoms(args, analysis);
+        ProjectionBuild projection = projection(analysis, atoms, optionalBoolean(args, "include_unmatched_buckets", false));
         StringBuilder tsv = new StringBuilder();
         tsv.append("bucket_key\tcount\texample_row_ids");
         for (int i = 0; i < atoms.size(); i++) {
             tsv.append("\tatom_").append(i + 1).append("_scaffold_atom")
+                    .append("\tatom_").append(i + 1).append("_exit_vector_label")
                     .append("\tatom_").append(i + 1).append("_bucket_type")
                     .append("\tatom_").append(i + 1).append("_label")
                     .append("\tatom_").append(i + 1).append("_fragment_idcode");
         }
-        tsv.append('\n');
+        tsv.append("\tclean_matched_context\tdiverse_other_position_count\n");
         int exampleLimit = safeLimit(args, "example_limit", 3);
         for (ProjectionRow row : projection.rows()) {
+            ProjectionContext context = projectionContext(analysis, row, atoms);
             appendTsv(tsv, row.bucketKey(), Integer.toString(row.rowIds().size()), String.join("|", row.rowIds().stream().limit(exampleLimit).toList()));
             for (int i = 0; i < row.buckets().size(); i++) {
                 BucketView bucket = row.buckets().get(i);
-                appendTsv(tsv, Integer.toString(atoms.get(i)), bucket.type(), bucket.label(), bucket.fragmentIdcode());
+                appendTsv(tsv, Integer.toString(atoms.get(i)), labelFor(analysis, atoms.get(i)), bucket.type(), bucket.label(), bucket.fragmentIdcode());
             }
+            appendTsv(tsv, Boolean.toString(context.cleanMatchedContext()), Integer.toString(context.diverseOtherPositionCount()));
             tsv.append('\n');
         }
         McpArtifactService.ArtifactRecord artifact = artifacts.writeText(
@@ -279,17 +289,19 @@ final class ScaffoldSarMcpTool {
         return rows;
     }
 
-    private ScaffoldAnalysisView analysisView(StoredAnalysis analysis, int topSubstituentLimit, int exampleLimit) {
+    private ScaffoldAnalysisView analysisView(StoredAnalysis analysis, int topSubstituentLimit, int exampleLimit, boolean includeUnmatchedBuckets) {
         ScaffoldDatasetDecomposition dataset = analysis.dataset();
         List<ScaffoldExitVectorSummary> exitVectors = dataset.observedExitVectorAtoms.stream()
-                .map(atom -> exitVectorSummary(analysis, atom, topSubstituentLimit, exampleLimit))
+                .map(atom -> exitVectorSummary(analysis, atom, topSubstituentLimit, exampleLimit, includeUnmatchedBuckets))
                 .toList();
         return new ScaffoldAnalysisView(
                 analysis.analysisId(),
                 analysis.sessionId(),
                 analysis.rowSetId(),
                 scaffoldSmiles(dataset.template),
+                mappedScaffoldSmiles(dataset.template),
                 dataset.template.idcode,
+                dataset.template.scaffold.getAtoms(),
                 analysis.structures().rowCount(),
                 analysis.structures().structureCount(),
                 analysis.structures().skippedRows(),
@@ -297,26 +309,31 @@ final class ScaffoldSarMcpTool {
                 dataset.unmatchedCompoundCount,
                 dataset.multiAttachmentCompoundCount,
                 exitVectors.size(),
+                mappedExitVectorLabels(analysis),
+                exampleRowIds(analysis, true, exampleLimit),
+                exampleRowIds(analysis, false, exampleLimit),
+                dataset.matchedCompoundCount == 0 ? "Scaffold parsed successfully, but matched zero usable structures in this row set. Check ring size, protonation/aromaticity, and whether the SMILES is a true embedded conserved substructure." : null,
                 exitVectors
         );
     }
 
-    private ScaffoldExitVectorSummary exitVectorSummary(StoredAnalysis analysis, int atom, int limit, int exampleLimit) {
-        ProjectionBuild projection = projection(analysis, List.of(atom));
+    private ScaffoldExitVectorSummary exitVectorSummary(StoredAnalysis analysis, int atom, int limit, int exampleLimit, boolean includeUnmatchedBuckets) {
+        ProjectionBuild projection = projection(analysis, List.of(atom), includeUnmatchedBuckets);
         List<ScaffoldProjectionRow> rows = projection.rows().stream()
                 .limit(limit)
                 .map(row -> projectionRow(analysis, row, List.of(atom), exampleLimit, null, null, "gte", 5))
                 .toList();
         return new ScaffoldExitVectorSummary(
                 atom,
-                analysis.dataset().exitVectorLabel(atom),
+                labelFor(analysis, atom),
                 analysis.dataset().template.atomSymmetryClasses[atom],
                 projection.totalRows(),
+                projection.suppressedUnmatchedRows(),
                 rows
         );
     }
 
-    private ProjectionBuild projection(StoredAnalysis analysis, List<Integer> atoms) {
+    private ProjectionBuild projection(StoredAnalysis analysis, List<Integer> atoms, boolean includeUnmatchedBuckets) {
         if (atoms.isEmpty()) {
             throw new ChemOperationException("invalid_scaffold_projection", "scaffold_atoms must contain at least one atom index.");
         }
@@ -332,11 +349,14 @@ final class ScaffoldSarMcpTool {
             MutableProjectionRow row = rows.computeIfAbsent(key, ignored -> new MutableProjectionRow(key, buckets));
             row.rowIds.add(analysis.prepared().get(record.compound.index).entry().rowId());
         }
-        List<ProjectionRow> sorted = rows.values().stream()
+        List<ProjectionRow> allRows = rows.values().stream()
                 .map(MutableProjectionRow::toRow)
                 .sorted(Comparator.comparingInt((ProjectionRow row) -> row.rowIds().size()).reversed().thenComparing(ProjectionRow::bucketKey))
                 .toList();
-        return new ProjectionBuild(sorted.size(), sorted);
+        List<ProjectionRow> filtered = includeUnmatchedBuckets
+                ? allRows
+                : allRows.stream().filter(row -> row.buckets().stream().noneMatch(bucket -> "UNMATCHED".equals(bucket.type()))).toList();
+        return new ProjectionBuild(filtered.size(), allRows.size() - filtered.size(), filtered);
     }
 
     private ScaffoldProjectionRow projectionRow(StoredAnalysis analysis,
@@ -355,6 +375,7 @@ final class ScaffoldSarMcpTool {
                 row.rowIds().size(),
                 row.rowIds().stream().limit(exampleLimit).toList(),
                 row.buckets(),
+                projectionContext(analysis, row, atoms),
                 columns == null ? null : columns.columns()
         );
     }
@@ -372,6 +393,55 @@ final class ScaffoldSarMcpTool {
             return new BucketView("sub:" + assignment.fragmentIdcode, "SUBSTITUENT", label, assignment.fragmentIdcode);
         }
         return new BucketView("none", "UNSUBSTITUTED", "[unsubstituted]", null);
+    }
+
+    private ProjectionContext projectionContext(StoredAnalysis analysis, ProjectionRow row, List<Integer> selectedAtoms) {
+        Set<Integer> selected = new HashSet<>(selectedAtoms);
+        List<Integer> otherAtoms = analysis.dataset().observedExitVectorAtoms.stream()
+                .filter(atom -> !selected.contains(atom))
+                .toList();
+        if (otherAtoms.isEmpty()) {
+            return new ProjectionContext(0, 0, true, List.of());
+        }
+        Map<String, CompoundDecompositionRecord> recordsByRowId = recordsByRowId(analysis);
+        List<OtherPositionDiversity> diverse = new ArrayList<>();
+        for (int atom : otherAtoms) {
+            Map<String, Integer> countsByLabel = new LinkedHashMap<>();
+            for (String rowId : row.rowIds()) {
+                CompoundDecompositionRecord record = recordsByRowId.get(rowId);
+                if (record == null || !record.matched) {
+                    continue;
+                }
+                BucketView bucket = bucket(analysis.dataset(), record, atom);
+                String key = bucket.type() + ":" + bucket.label();
+                countsByLabel.merge(key, 1, Integer::sum);
+            }
+            if (countsByLabel.size() > 1) {
+                List<String> topBuckets = countsByLabel.entrySet().stream()
+                        .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry::getKey))
+                        .limit(3)
+                        .map(entry -> entry.getKey() + " (" + entry.getValue() + ")")
+                        .toList();
+                diverse.add(new OtherPositionDiversity(atom, labelFor(analysis, atom), countsByLabel.size(), topBuckets));
+            }
+        }
+        return new ProjectionContext(otherAtoms.size(), diverse.size(), diverse.isEmpty(), diverse.stream().limit(5).toList());
+    }
+
+    private Map<String, CompoundDecompositionRecord> recordsByRowId(StoredAnalysis analysis) {
+        Map<String, CompoundDecompositionRecord> result = new LinkedHashMap<>();
+        for (CompoundDecompositionRecord record : analysis.dataset().records) {
+            result.put(analysis.prepared().get(record.compound.index).entry().rowId(), record);
+        }
+        return result;
+    }
+
+    private static List<String> exampleRowIds(StoredAnalysis analysis, boolean matched, int limit) {
+        return analysis.dataset().records.stream()
+                .filter(record -> record.matched == matched)
+                .map(record -> analysis.prepared().get(record.compound.index).entry().rowId())
+                .limit(limit)
+                .toList();
     }
 
     private List<PreparedStructure> preparedStructures(PrismRowSetStructureCollection structures) {
@@ -397,14 +467,37 @@ final class ScaffoldSarMcpTool {
         return cfg;
     }
 
-    private List<Integer> scaffoldAtoms(ObjectNode args) {
+    private List<Integer> scaffoldAtoms(ObjectNode args, StoredAnalysis analysis) {
+        JsonNode mapNode = args.get("scaffold_atom_maps");
+        if (mapNode == null || mapNode.isNull()) {
+            JsonNode singleMap = args.get("scaffold_atom_map");
+            if (singleMap != null && singleMap.canConvertToInt()) {
+                return List.of(resolveAtomMap(analysis.dataset().template, singleMap.asInt()));
+            }
+        } else {
+            if (!mapNode.isArray()) {
+                throw new ChemOperationException("invalid_scaffold_projection", "scaffold_atom_maps must be an array of integer atom-map numbers.");
+            }
+            ArrayList<Integer> atoms = new ArrayList<>();
+            for (JsonNode item : mapNode) {
+                if (!item.canConvertToInt()) {
+                    throw new ChemOperationException("invalid_scaffold_projection", "scaffold_atom_maps must contain only integers.");
+                }
+                atoms.add(resolveAtomMap(analysis.dataset().template, item.asInt()));
+            }
+            return List.copyOf(atoms);
+        }
+
         JsonNode node = args.get("scaffold_atoms");
         if (node == null || node.isNull()) {
             JsonNode single = args.get("scaffold_atom");
             if (single != null && single.canConvertToInt()) {
                 return List.of(single.asInt());
             }
-            throw new ChemOperationException("invalid_scaffold_projection", "Provide scaffold_atoms as an array of zero-based scaffold atom indices.");
+            if (!analysis.exitAtomLabels().isEmpty()) {
+                return List.copyOf(analysis.exitAtomLabels().keySet());
+            }
+            throw new ChemOperationException("invalid_scaffold_projection", "Provide scaffold_atoms as zero-based scaffold atom indices or scaffold_atom_maps as SMILES atom-map numbers.");
         }
         if (!node.isArray()) {
             throw new ChemOperationException("invalid_scaffold_projection", "scaffold_atoms must be an array of integers.");
@@ -417,6 +510,69 @@ final class ScaffoldSarMcpTool {
             atoms.add(item.asInt());
         }
         return List.copyOf(atoms);
+    }
+
+    private static Map<Integer, String> exitAtomLabels(ObjectNode args, ScaffoldTemplate template) {
+        LinkedHashMap<Integer, String> result = new LinkedHashMap<>();
+        JsonNode mapLabels = args.get("exit_atom_map_labels");
+        if (mapLabels != null && !mapLabels.isNull()) {
+            if (!mapLabels.isObject()) {
+                throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_map_labels must be an object mapping atom-map numbers to labels.");
+            }
+            mapLabels.fields().forEachRemaining(entry -> {
+                int mapNo;
+                try {
+                    mapNo = Integer.parseInt(entry.getKey());
+                } catch (NumberFormatException exception) {
+                    throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_map_labels keys must be integer atom-map numbers.", exception);
+                }
+                if (!entry.getValue().isTextual() || entry.getValue().asText().isBlank()) {
+                    throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_map_labels values must be non-blank strings.");
+                }
+                result.put(resolveAtomMap(template, mapNo), entry.getValue().asText());
+            });
+        }
+        JsonNode atomLabels = args.get("exit_atom_labels");
+        if (atomLabels != null && !atomLabels.isNull()) {
+            if (!atomLabels.isObject()) {
+                throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_labels must be an object mapping zero-based scaffold atom indices to labels.");
+            }
+            atomLabels.fields().forEachRemaining(entry -> {
+                int atom;
+                try {
+                    atom = Integer.parseInt(entry.getKey());
+                } catch (NumberFormatException exception) {
+                    throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_labels keys must be integer scaffold atom indices.", exception);
+                }
+                if (atom < 0 || atom >= template.scaffold.getAtoms()) {
+                    throw new ChemOperationException("invalid_scaffold_labels", "Scaffold atom index " + atom + " is outside the scaffold atom range.");
+                }
+                if (!entry.getValue().isTextual() || entry.getValue().asText().isBlank()) {
+                    throw new ChemOperationException("invalid_scaffold_labels", "exit_atom_labels values must be non-blank strings.");
+                }
+                result.put(atom, entry.getValue().asText());
+            });
+        }
+        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(result));
+    }
+
+    private static int resolveAtomMap(ScaffoldTemplate template, int mapNo) {
+        if (mapNo == 0) {
+            throw new ChemOperationException("invalid_scaffold_atom_map", "Atom-map number 0 is not a scaffold label.");
+        }
+        int match = -1;
+        for (int atom = 0; atom < template.scaffold.getAtoms(); atom++) {
+            if (Math.abs(template.scaffold.getAtomMapNo(atom)) == mapNo) {
+                if (match != -1) {
+                    throw new ChemOperationException("invalid_scaffold_atom_map", "Atom-map number " + mapNo + " occurs on multiple scaffold atoms.");
+                }
+                match = atom;
+            }
+        }
+        if (match == -1) {
+            throw new ChemOperationException("invalid_scaffold_atom_map", "Atom-map number " + mapNo + " is not present on the parsed scaffold.");
+        }
+        return match;
     }
 
     private StoredDiscovery discovery(String discoveryId) {
@@ -439,6 +595,32 @@ final class ScaffoldSarMcpTool {
         return atoms.stream()
                 .map(atom -> new ScaffoldExitVectorView(atom, "Atom " + (atom + 1) + " (sym " + template.atomSymmetryClasses[atom] + ")", template.atomSymmetryClasses[atom]))
                 .toList();
+    }
+
+    private static List<ScaffoldExitVectorView> exitVectorViews(StoredAnalysis analysis, List<Integer> atoms) {
+        return atoms.stream()
+                .map(atom -> new ScaffoldExitVectorView(atom, labelFor(analysis, atom), analysis.dataset().template.atomSymmetryClasses[atom]))
+                .toList();
+    }
+
+    private static String labelFor(StoredAnalysis analysis, int atom) {
+        return analysis.exitAtomLabels().getOrDefault(atom, analysis.dataset().exitVectorLabel(atom));
+    }
+
+    private static List<MappedExitVectorLabel> mappedExitVectorLabels(StoredAnalysis analysis) {
+        return analysis.exitAtomLabels().entrySet().stream()
+                .map(entry -> new MappedExitVectorLabel(
+                        entry.getKey(),
+                        atomMapNo(analysis.dataset().template, entry.getKey()),
+                        entry.getValue(),
+                        analysis.dataset().template.atomSymmetryClasses[entry.getKey()]
+                ))
+                .toList();
+    }
+
+    private static Integer atomMapNo(ScaffoldTemplate template, int atom) {
+        int mapNo = Math.abs(template.scaffold.getAtomMapNo(atom));
+        return mapNo == 0 ? null : mapNo;
     }
 
     private static List<String> rowIds(List<PreparedStructure> prepared, List<Integer> indices) {
@@ -480,6 +662,16 @@ final class ScaffoldSarMcpTool {
             StereoMolecule molecule = new IDCodeParser(false).getCompactMolecule(template.idcode);
             molecule.ensureHelperArrays(Molecule.cHelperSymmetrySimple);
             return IsomericSmilesCreator.createSmiles(molecule);
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
+    private static String mappedScaffoldSmiles(ScaffoldTemplate template) {
+        try {
+            StereoMolecule molecule = new StereoMolecule(template.scaffold);
+            molecule.ensureHelperArrays(Molecule.cHelperSymmetrySimple);
+            return new IsomericSmilesCreator(molecule, IsomericSmilesCreator.MODE_INCLUDE_MAPPING).getSmiles();
         } catch (RuntimeException exception) {
             return "";
         }
@@ -597,7 +789,8 @@ final class ScaffoldSarMcpTool {
             String rowSetId,
             PrismRowSetStructureCollection structures,
             List<PreparedStructure> prepared,
-            ScaffoldDatasetDecomposition dataset
+            ScaffoldDatasetDecomposition dataset,
+            Map<Integer, String> exitAtomLabels
     ) {}
 
     private record ScaffoldDiscoveryView(
@@ -637,7 +830,9 @@ final class ScaffoldSarMcpTool {
             String sessionId,
             String rowSetId,
             String scaffoldSmiles,
+            String mappedScaffoldSmiles,
             String scaffoldIdcode,
+            int scaffoldAtomCount,
             int sourceRowCount,
             int structureCount,
             int skippedRows,
@@ -645,6 +840,10 @@ final class ScaffoldSarMcpTool {
             int unmatchedCount,
             int multiAttachmentCount,
             int observedExitVectorCount,
+            List<MappedExitVectorLabel> exitAtomMapLabels,
+            List<String> matchedExampleRowIds,
+            List<String> unmatchedExampleRowIds,
+            String warning,
             List<ScaffoldExitVectorSummary> observedExitVectors
     ) {}
 
@@ -653,6 +852,7 @@ final class ScaffoldSarMcpTool {
             String label,
             int symmetryClass,
             int distinctBucketCount,
+            int suppressedUnmatchedBucketCount,
             List<ScaffoldProjectionRow> topBuckets
     ) {}
 
@@ -662,7 +862,9 @@ final class ScaffoldSarMcpTool {
             String rowSetId,
             int dimension,
             List<Integer> scaffoldAtoms,
+            List<ScaffoldExitVectorView> scaffoldExitVectors,
             int totalBuckets,
+            int suppressedUnmatchedBucketCount,
             int returnedBuckets,
             int offset,
             int limit,
@@ -674,14 +876,26 @@ final class ScaffoldSarMcpTool {
             int count,
             List<String> exampleRowIds,
             List<BucketView> buckets,
+            ProjectionContext context,
             Object columnSummaries
     ) {}
 
     private record BucketView(String bucketKey, String type, String label, String fragmentIdcode) {}
 
-    private record ProjectionBuild(int totalRows, List<ProjectionRow> rows) {}
+    private record ProjectionContext(
+            int otherPositionCount,
+            int diverseOtherPositionCount,
+            boolean cleanMatchedContext,
+            List<OtherPositionDiversity> diverseOtherPositions
+    ) {}
+
+    private record OtherPositionDiversity(int scaffoldAtom, String label, int distinctBucketCount, List<String> topBuckets) {}
+
+    private record ProjectionBuild(int totalRows, int suppressedUnmatchedRows, List<ProjectionRow> rows) {}
 
     private record ProjectionRow(String bucketKey, List<BucketView> buckets, List<String> rowIds) {}
+
+    private record MappedExitVectorLabel(int scaffoldAtom, Integer atomMapNo, String label, int symmetryClass) {}
 
     private static final class MutableProjectionRow {
         private final String key;

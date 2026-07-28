@@ -41,6 +41,7 @@ import tech.molecules.structurized.prism.result.OptionalNumericResult;
 import tech.molecules.structurized.prism.result.OptionalNumericState;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -399,6 +400,112 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 neighbors.size(),
                 neighbors
         );
+    }
+
+    @Override
+    public synchronized PrismGraphShortestPath findGraphShortestPath(String sessionId,
+                                                                     String graphId,
+                                                                     String sourceRowId,
+                                                                     String targetRowId,
+                                                                     boolean includePath,
+                                                                     int maxDepth,
+                                                                     int transformExampleLimit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        String sourceId = normalizeId(sourceRowId, "sourceRowId");
+        String targetId = normalizeId(targetRowId, "targetRowId");
+        if (session.workspace().physicalRowForRowId(sourceId).isEmpty()) {
+            throw new ChemOperationException("prism_row_not_found", "Prism row " + sourceId + " does not exist.");
+        }
+        if (session.workspace().physicalRowForRowId(targetId).isEmpty()) {
+            throw new ChemOperationException("prism_row_not_found", "Prism row " + targetId + " does not exist.");
+        }
+        PrismRowMember source = rowMember(session, sourceId);
+        PrismRowMember target = rowMember(session, targetId);
+        boolean sourceInGraph = graph.rowIds().contains(sourceId);
+        boolean targetInGraph = graph.rowIds().contains(targetId);
+        if (!sourceInGraph || !targetInGraph) {
+            String reason = !sourceInGraph && !targetInGraph
+                    ? "rows_not_in_graph"
+                    : (!sourceInGraph ? "source_not_in_graph" : "target_not_in_graph");
+            return new PrismGraphShortestPath(graphSummary(session, graph), source, target, false, null, 0, reason, List.of(), List.of());
+        }
+        if (sourceId.equals(targetId)) {
+            return new PrismGraphShortestPath(
+                    graphSummary(session, graph),
+                    source,
+                    target,
+                    true,
+                    0,
+                    0,
+                    "same_row",
+                    includePath ? List.of(source) : List.of(),
+                    List.of());
+        }
+
+        int safeMaxDepth = Math.max(0, maxDepth);
+        int safeExampleLimit = Math.min(25, Math.max(1, transformExampleLimit <= 0 ? 2 : transformExampleLimit));
+        int depthLimit = safeMaxDepth == 0 ? Integer.MAX_VALUE : safeMaxDepth;
+        ArrayDeque<String> queue = new ArrayDeque<>();
+        Map<String, String> predecessor = new HashMap<>();
+        Map<String, Integer> depth = new HashMap<>();
+        queue.add(sourceId);
+        depth.put(sourceId, 0);
+        int searchedDepth = 0;
+        boolean reached = false;
+        while (!queue.isEmpty() && !reached) {
+            String current = queue.removeFirst();
+            int currentDepth = depth.get(current);
+            searchedDepth = Math.max(searchedDepth, currentDepth);
+            if (currentDepth >= depthLimit) {
+                continue;
+            }
+            for (String neighbor : graph.neighborRowIds(current).stream().sorted().toList()) {
+                if (depth.containsKey(neighbor)) {
+                    continue;
+                }
+                predecessor.put(neighbor, current);
+                depth.put(neighbor, currentDepth + 1);
+                if (neighbor.equals(targetId)) {
+                    searchedDepth = Math.max(searchedDepth, currentDepth + 1);
+                    reached = true;
+                    break;
+                }
+                queue.addLast(neighbor);
+            }
+        }
+        if (!reached) {
+            String reason = safeMaxDepth > 0 ? "max_depth_exceeded" : "no_path";
+            return new PrismGraphShortestPath(graphSummary(session, graph), source, target, false, null, searchedDepth, reason, List.of(), List.of());
+        }
+
+        ArrayList<String> pathIds = new ArrayList<>();
+        String cursor = targetId;
+        pathIds.add(cursor);
+        while (!cursor.equals(sourceId)) {
+            cursor = predecessor.get(cursor);
+            pathIds.add(cursor);
+        }
+        Collections.reverse(pathIds);
+        List<PrismRowMember> pathRows = includePath
+                ? pathIds.stream().map(rowId -> rowMember(session, rowId)).toList()
+                : List.of();
+        List<PrismGraphPathStep> steps = new ArrayList<>();
+        if (includePath) {
+            for (int i = 0; i < pathIds.size() - 1; i++) {
+                steps.add(pathStep(graph, pathIds.get(i), pathIds.get(i + 1), safeExampleLimit));
+            }
+        }
+        return new PrismGraphShortestPath(
+                graphSummary(session, graph),
+                source,
+                target,
+                true,
+                pathIds.size() - 1,
+                searchedDepth,
+                "connected",
+                pathRows,
+                steps);
     }
 
     @Override
@@ -1726,6 +1833,22 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     private PrismGraphEdgeView edgeView(PrismRowGraphEdge edge) {
         return new PrismGraphEdgeView(edge.id(), edge.sourceRowId(), edge.targetRowId(), edge.label(), edge.properties());
+    }
+
+    private PrismGraphPathStep pathStep(PrismRowGraph graph, String fromRowId, String toRowId, int transformExampleLimit) {
+        List<PrismGraphEdgeView> edges = edgesBetween(graph, fromRowId, toRowId);
+        LinkedHashMap<String, PrismMmpTransformText> transforms = new LinkedHashMap<>();
+        for (PrismGraphEdgeView edge : edges) {
+            PrismMmpTransformText text = PrismMmpTransformRenderer.render(edge.properties());
+            if (text.transformId() != null) {
+                transforms.putIfAbsent(text.transformId(), text);
+            }
+        }
+        return new PrismGraphPathStep(
+                fromRowId,
+                toRowId,
+                edges.size(),
+                transforms.values().stream().limit(transformExampleLimit).toList());
     }
 
     private PrismCollapsedGraphNeighbor collapsedNeighbor(ManagedPrismSession session,

@@ -8,6 +8,7 @@ import tech.molecules.structurized.ai.prism.PrismCollapsedGraphNeighborhood;
 import tech.molecules.structurized.ai.prism.PrismGraphAnalysis;
 import tech.molecules.structurized.ai.prism.PrismGraphEdgeView;
 import tech.molecules.structurized.ai.prism.PrismGraphNeighborhood;
+import tech.molecules.structurized.ai.prism.PrismGraphShortestPath;
 import tech.molecules.structurized.ai.prism.PrismGraphTsvExport;
 import tech.molecules.structurized.ai.prism.PrismMmpTransformSummary;
 
@@ -74,6 +75,30 @@ final class PrismGraphMcpTool {
                 edgeCount,
                 returnedNeighbors);
         return output.maybeFile(args, "inspect_prism_graph_neighborhood", response, summary, returnedNeighbors);
+    }
+
+    Object findPrismGraphShortestPath(ObjectNode args) {
+        PrismGraphShortestPath response = prism.findGraphShortestPath(
+                requiredString(args, "session_id"),
+                requiredString(args, "graph_id"),
+                requiredString(args, "source_row_id"),
+                requiredString(args, "target_row_id"),
+                optionalBoolean(args, "include_path", false),
+                Math.max(0, optionalInt(args, "max_depth", 0)),
+                Math.max(1, optionalInt(args, "transform_example_limit", 2)));
+        return output.maybeFile(
+                args,
+                "find_prism_graph_shortest_path",
+                response,
+                new PrismGraphShortestPathArtifactSummary(
+                        response.graph().sessionId(),
+                        response.graph().graphId(),
+                        response.source().rowId(),
+                        response.target().rowId(),
+                        response.connected(),
+                        response.distance(),
+                        response.steps().size()),
+                response.steps().size());
     }
 
     Object summarizePrismMmpTransforms(ObjectNode args) {
@@ -331,6 +356,16 @@ final class PrismGraphMcpTool {
             int returnedTransforms,
             int offset,
             int limit
+    ) {}
+
+    private record PrismGraphShortestPathArtifactSummary(
+            String sessionId,
+            String graphId,
+            String sourceRowId,
+            String targetRowId,
+            boolean connected,
+            Integer distance,
+            int returnedSteps
     ) {}
 
     private record ExportPrismGraphResult(ExportPrismGraphSummary summary, McpArtifactService.ArtifactRecord artifact) {}
