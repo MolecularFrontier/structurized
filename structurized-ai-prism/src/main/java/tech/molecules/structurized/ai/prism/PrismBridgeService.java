@@ -35,7 +35,15 @@ public interface PrismBridgeService {
 
     PrismGraphSummary summarizeGraph(String sessionId, String graphId);
 
+    PrismGraphAnalysis analyzeGraph(String sessionId, String graphId, int limit);
+
+    PrismGraphTsvExport exportGraph(String sessionId, String graphId, String format);
+
     PrismGraphNeighborhood inspectGraphNeighborhood(String sessionId, String graphId, String centerRowId, int limit);
+
+    PrismCollapsedGraphNeighborhood inspectCollapsedGraphNeighborhood(String sessionId, String graphId, String centerRowId, int limit, int transformExampleLimit);
+
+    PrismMmpTransformSummary summarizeMmpTransforms(String sessionId, String graphId, int minSupport, String sortBy, int offset, int limit, int exampleLimit);
 
     PrismRowSetSummary createGraphNeighborhoodRowSet(CreatePrismGraphNeighborhoodRowSetRequest request);
 

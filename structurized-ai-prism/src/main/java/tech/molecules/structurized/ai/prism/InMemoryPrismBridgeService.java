@@ -48,6 +48,8 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -291,6 +293,50 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return graphSummary(session, graph(session, graphId));
     }
 
+
+    @Override
+    public synchronized PrismGraphAnalysis analyzeGraph(String sessionId, String graphId, int limit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? 20 : limit));
+        List<PrismGraphNodeStat> nodeStats = graph.rowIds().stream()
+                .map(rowId -> new PrismGraphNodeStat(rowId, graph.degree(rowId)))
+                .sorted((a, b) -> {
+                    int byDegree = Integer.compare(b.degree(), a.degree());
+                    return byDegree != 0 ? byDegree : a.rowId().compareTo(b.rowId());
+                })
+                .toList();
+        int sourceRowCount = graph.sourceRowSetId() == null
+                ? graph.rowIds().size()
+                : rowSet(session, graph.sourceRowSetId()).rowIds().size();
+        int isolatedSourceRowCount = graph.sourceRowSetId() == null
+                ? 0
+                : (int) rowSet(session, graph.sourceRowSetId()).rowIds().stream()
+                        .filter(rowId -> !graph.rowIds().contains(rowId))
+                        .count();
+        return new PrismGraphAnalysis(
+                graphSummary(session, graph),
+                sourceRowCount,
+                graph.rowIds().size(),
+                isolatedSourceRowCount,
+                degreeStats(nodeStats),
+                safeLimit,
+                nodeStats.stream().limit(safeLimit).toList()
+        );
+    }
+
+    @Override
+    public synchronized PrismGraphTsvExport exportGraph(String sessionId, String graphId, String format) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        String normalized = format == null || format.isBlank() ? "edges_tsv" : format.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "edges_tsv" -> exportGraphEdges(session, graph);
+            case "nodes_tsv" -> exportGraphNodes(session, graph);
+            default -> throw new ChemOperationException("unsupported_prism_graph_export_format", "format must be edges_tsv or nodes_tsv.");
+        };
+    }
+
     @Override
     public synchronized PrismGraphNeighborhood inspectGraphNeighborhood(String sessionId,
                                                                         String graphId,
@@ -320,6 +366,71 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 graph.neighborRowIds(rowId).size(),
                 graph.incidentEdges(rowId).size(),
                 neighbors
+        );
+    }
+
+    @Override
+    public synchronized PrismCollapsedGraphNeighborhood inspectCollapsedGraphNeighborhood(String sessionId,
+                                                                                         String graphId,
+                                                                                         String centerRowId,
+                                                                                         int limit,
+                                                                                         int transformExampleLimit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        String rowId = normalizeId(centerRowId, "centerRowId");
+        if (session.workspace().physicalRowForRowId(rowId).isEmpty()) {
+            throw new ChemOperationException("prism_row_not_found", "Prism row " + rowId + " does not exist.");
+        }
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? 10 : limit));
+        int safeExampleLimit = Math.min(25, Math.max(1, transformExampleLimit <= 0 ? 3 : transformExampleLimit));
+        List<String> neighborIds = graph.neighborRowIds(rowId).stream()
+                .sorted((a, b) -> Integer.compare(graph.degree(b), graph.degree(a)))
+                .limit(safeLimit)
+                .toList();
+        List<PrismCollapsedGraphNeighbor> neighbors = neighborIds.stream()
+                .map(neighborId -> collapsedNeighbor(session, graph, rowId, neighborId, safeExampleLimit))
+                .toList();
+        return new PrismCollapsedGraphNeighborhood(
+                graphSummary(session, graph),
+                rowMember(session, rowId),
+                graph.neighborRowIds(rowId).size(),
+                graph.incidentEdges(rowId).size(),
+                "collapsed",
+                neighbors.size(),
+                neighbors
+        );
+    }
+
+    @Override
+    public synchronized PrismMmpTransformSummary summarizeMmpTransforms(String sessionId,
+                                                                        String graphId,
+                                                                        int minSupport,
+                                                                        String sortBy,
+                                                                        int offset,
+                                                                        int limit,
+                                                                        int exampleLimit) {
+        ManagedPrismSession session = session(sessionId);
+        PrismRowGraph graph = graph(session, graphId);
+        String normalizedSort = normalizeMmpTransformSort(sortBy);
+        int safeMinSupport = Math.max(1, minSupport);
+        int safeOffset = Math.max(0, offset);
+        int safeLimit = Math.min(PAGE_LIMIT_MAX, Math.max(1, limit <= 0 ? 50 : limit));
+        int safeExampleLimit = Math.min(25, Math.max(1, exampleLimit <= 0 ? 3 : exampleLimit));
+        List<PrismMmpTransformSummaryRow> allRows = transformSummaryRows(graph, safeExampleLimit).stream()
+                .filter(row -> row.supportCount() >= safeMinSupport)
+                .sorted(transformSummaryComparator(normalizedSort))
+                .toList();
+        int from = Math.min(safeOffset, allRows.size());
+        int to = Math.min(from + safeLimit, allRows.size());
+        List<PrismMmpTransformSummaryRow> page = allRows.subList(from, to);
+        return new PrismMmpTransformSummary(
+                graphSummary(session, graph),
+                normalizedSort,
+                allRows.size(),
+                page.size(),
+                safeOffset,
+                safeLimit,
+                page
         );
     }
 
@@ -363,6 +474,77 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 : request.rowSetId().trim();
         PrismRowSet sourceRowSet = rowSet(session, rowSetId);
         return mmpGraphs.mine(session, sourceRowSet, request);
+    }
+
+
+    private static PrismGraphDegreeStats degreeStats(List<PrismGraphNodeStat> nodeStats) {
+        if (nodeStats.isEmpty()) {
+            return new PrismGraphDegreeStats(0, 0.0, 0);
+        }
+        List<Integer> degrees = nodeStats.stream().map(PrismGraphNodeStat::degree).sorted().toList();
+        int min = degrees.getFirst();
+        int max = degrees.getLast();
+        int size = degrees.size();
+        double median = size % 2 == 1
+                ? degrees.get(size / 2)
+                : (degrees.get(size / 2 - 1) + degrees.get(size / 2)) / 2.0;
+        return new PrismGraphDegreeStats(min, median, max);
+    }
+
+    private static PrismGraphTsvExport exportGraphEdges(ManagedPrismSession session, PrismRowGraph graph) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("edge_id\tsource_row_id\ttarget_row_id\tlabel\ttransform_id\ttransform_text\tkey_fragment\tfrom_fragment\tto_fragment\tcut_count\tdelta\tvalue_a\tvalue_b\tkey_idcode\tfrom_value_idcode\tto_value_idcode\n");
+        for (PrismRowGraphEdge edge : graph.edges()) {
+            Map<String, Object> properties = edge.properties();
+            PrismMmpTransformText transform = PrismMmpTransformRenderer.render(properties);
+            appendTsvCells(builder,
+                    edge.id(),
+                    edge.sourceRowId(),
+                    edge.targetRowId(),
+                    edge.label(),
+                    propertyText(properties, "transformId"),
+                    transform.transformText(),
+                    transform.keyFragment(),
+                    transform.fromFragment(),
+                    transform.toFragment(),
+                    propertyText(properties, "cutCount"),
+                    propertyText(properties, "delta"),
+                    propertyText(properties, "valueA"),
+                    propertyText(properties, "valueB"),
+                    propertyText(properties, "keyIdcode"),
+                    propertyText(properties, "fromValueIdcode"),
+                    propertyText(properties, "toValueIdcode"));
+        }
+        return new PrismGraphTsvExport(PrismMmpGraphService.graphSummary(session, graph), "edges_tsv", graph.edges().size(), builder.toString());
+    }
+
+    private static PrismGraphTsvExport exportGraphNodes(ManagedPrismSession session, PrismRowGraph graph) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("row_id\tdegree\n");
+        List<String> rowIds = graph.rowIds().stream().sorted().toList();
+        for (String rowId : rowIds) {
+            appendTsvCells(builder, rowId, Integer.toString(graph.degree(rowId)));
+        }
+        return new PrismGraphTsvExport(PrismMmpGraphService.graphSummary(session, graph), "nodes_tsv", rowIds.size(), builder.toString());
+    }
+
+    private static String propertyText(Map<String, Object> properties, String key) {
+        Object value = properties.get(key);
+        return value == null ? "" : value.toString();
+    }
+
+    private static void appendTsvCells(StringBuilder builder, String... values) {
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) {
+                builder.append('\t');
+            }
+            builder.append(tsvCell(values[i]));
+        }
+        builder.append('\n');
+    }
+
+    private static String tsvCell(String value) {
+        return value == null ? "" : value.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
     }
 
     @Override
@@ -1484,6 +1666,133 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     private PrismGraphEdgeView edgeView(PrismRowGraphEdge edge) {
         return new PrismGraphEdgeView(edge.id(), edge.sourceRowId(), edge.targetRowId(), edge.label(), edge.properties());
+    }
+
+    private PrismCollapsedGraphNeighbor collapsedNeighbor(ManagedPrismSession session,
+                                                         PrismRowGraph graph,
+                                                         String centerRowId,
+                                                         String neighborRowId,
+                                                         int transformExampleLimit) {
+        List<PrismGraphEdgeView> edges = edgesBetween(graph, centerRowId, neighborRowId);
+        List<Double> deltas = edges.stream()
+                .map(edge -> propertyDouble(edge.properties(), "delta"))
+                .filter(Objects::nonNull)
+                .sorted()
+                .toList();
+        LinkedHashMap<String, PrismMmpTransformText> transforms = new LinkedHashMap<>();
+        for (PrismGraphEdgeView edge : edges) {
+            PrismMmpTransformText text = PrismMmpTransformRenderer.render(edge.properties());
+            if (text.transformId() != null) {
+                transforms.putIfAbsent(text.transformId(), text);
+            }
+        }
+        return new PrismCollapsedGraphNeighbor(
+                rowMember(session, neighborRowId),
+                graph.degree(neighborRowId),
+                edges.size(),
+                transforms.size(),
+                deltas.isEmpty() ? null : deltas.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN),
+                median(deltas),
+                deltas.isEmpty() ? null : deltas.getFirst(),
+                deltas.isEmpty() ? null : deltas.getLast(),
+                transforms.values().stream().limit(transformExampleLimit).toList()
+        );
+    }
+
+    private static List<PrismMmpTransformSummaryRow> transformSummaryRows(PrismRowGraph graph, int exampleLimit) {
+        Map<String, List<PrismRowGraphEdge>> byTransform = new HashMap<>();
+        for (PrismRowGraphEdge edge : graph.edges()) {
+            String transformId = propertyText(edge.properties(), "transformId");
+            if (transformId == null || transformId.isBlank()) {
+                continue;
+            }
+            byTransform.computeIfAbsent(transformId, ignored -> new ArrayList<>()).add(edge);
+        }
+        ArrayList<PrismMmpTransformSummaryRow> rows = new ArrayList<>();
+        for (Map.Entry<String, List<PrismRowGraphEdge>> entry : byTransform.entrySet()) {
+            List<PrismRowGraphEdge> edges = entry.getValue().stream()
+                    .sorted(Comparator.comparing(PrismRowGraphEdge::sourceRowId).thenComparing(PrismRowGraphEdge::targetRowId))
+                    .toList();
+            List<Double> deltas = edges.stream()
+                    .map(edge -> propertyDouble(edge.properties(), "delta"))
+                    .filter(Objects::nonNull)
+                    .sorted()
+                    .toList();
+            PrismRowGraphEdge first = edges.getFirst();
+            PrismMmpTransformText text = PrismMmpTransformRenderer.render(first.properties());
+            rows.add(new PrismMmpTransformSummaryRow(
+                    entry.getKey(),
+                    text.cutCount(),
+                    text.keyFragment(),
+                    text.fromFragment(),
+                    text.toFragment(),
+                    text.transformText(),
+                    edges.size(),
+                    deltas.size(),
+                    deltas.isEmpty() ? null : deltas.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN),
+                    median(deltas),
+                    deltas.isEmpty() ? null : deltas.getFirst(),
+                    deltas.isEmpty() ? null : deltas.getLast(),
+                    deltas.isEmpty() ? null : deltas.stream().filter(delta -> delta > 0.0).count() / (double) deltas.size(),
+                    edges.stream().limit(exampleLimit).map(PrismRowGraphEdge::id).toList(),
+                    edges.stream().limit(exampleLimit).map(PrismRowGraphEdge::sourceRowId).toList(),
+                    edges.stream().limit(exampleLimit).map(PrismRowGraphEdge::targetRowId).toList()
+            ));
+        }
+        return List.copyOf(rows);
+    }
+
+    private static Comparator<PrismMmpTransformSummaryRow> transformSummaryComparator(String sortBy) {
+        Comparator<PrismMmpTransformSummaryRow> byText = Comparator.comparing(row -> row.transformText() == null ? row.transformId() : row.transformText());
+        return switch (sortBy) {
+            case "median_delta_desc" -> Comparator.comparing(
+                    PrismMmpTransformSummaryRow::medianDelta,
+                    Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(byText);
+            case "median_delta_asc" -> Comparator.comparing(
+                    PrismMmpTransformSummaryRow::medianDelta,
+                    Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(byText);
+            case "abs_median_delta_desc" -> Comparator.comparingDouble((PrismMmpTransformSummaryRow row) -> row.medianDelta() == null ? -1.0 : Math.abs(row.medianDelta()))
+                    .reversed()
+                    .thenComparing(byText);
+            case "transform_text" -> byText;
+            case "support_desc" -> Comparator.comparingInt(PrismMmpTransformSummaryRow::supportCount).reversed().thenComparing(byText);
+            default -> throw new IllegalStateException("Unexpected MMP transform sort: " + sortBy);
+        };
+    }
+
+    private static String normalizeMmpTransformSort(String sortBy) {
+        String normalized = sortBy == null || sortBy.isBlank() ? "support_desc" : sortBy.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "support_desc", "median_delta_desc", "median_delta_asc", "abs_median_delta_desc", "transform_text" -> normalized;
+            default -> throw new ChemOperationException("invalid_mmp_transform_sort", "sort_by must be support_desc, median_delta_desc, median_delta_asc, abs_median_delta_desc, or transform_text.");
+        };
+    }
+
+    private static Double median(List<Double> sortedValues) {
+        if (sortedValues.isEmpty()) {
+            return null;
+        }
+        int size = sortedValues.size();
+        int mid = size / 2;
+        if (size % 2 == 1) {
+            return sortedValues.get(mid);
+        }
+        return (sortedValues.get(mid - 1) + sortedValues.get(mid)) / 2.0;
+    }
+
+    private static Double propertyDouble(Map<String, Object> properties, String key) {
+        Object value = properties.get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Double.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private PrismGrouping grouping(ManagedPrismSession session, String groupingId) {

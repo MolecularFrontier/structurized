@@ -50,13 +50,14 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(84, tools.size());
+        assertEquals(88, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
         assertTrue(hasTool(tools, "get_artifact_info"));
         assertTrue(hasTool(tools, "get_structurized_tool_guide"));
         assertTrue(hasTool(tools, "search_substructure"));
+        assertTrue(hasTool(tools, "compare_structures"));
         assertTrue(hasTool(tools, "cut_bonds"));
         assertTrue(hasTool(tools, "open_prism_dataset"));
         assertTrue(hasTool(tools, "open_prism_pack"));
@@ -89,7 +90,10 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "create_prism_group_row_set"));
         assertTrue(hasTool(tools, "list_prism_graphs"));
         assertTrue(hasTool(tools, "summarize_prism_graph"));
+        assertTrue(hasTool(tools, "analyze_prism_graph"));
+        assertTrue(hasTool(tools, "export_prism_graph"));
         assertTrue(hasTool(tools, "inspect_prism_graph_neighborhood"));
+        assertTrue(hasTool(tools, "summarize_prism_mmp_transforms"));
         assertTrue(hasTool(tools, "create_prism_graph_neighborhood_row_set"));
         assertTrue(hasTool(tools, "mine_prism_mmp_graph"));
         assertTrue(hasTool(tools, "summarize_prism_row_set_by_columns"));
@@ -116,6 +120,64 @@ class McpJsonRpcHandlerTest {
         assertTrue(toolDescription(tools, "validate_decomposition_config").contains("SMARTS compilation"));
         assertTrue(toolDescription(tools, "create_decomposition_config").contains("zero-based SMARTS query atom indices"));
         assertEquals("object", tools.get(0).at("/inputSchema/type").asText());
+    }
+
+    @Test
+    void canCompareStructuresThroughToolCalls() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+
+        JsonNode summary = call(handler, request(1, "compare_structures", """
+                {"left_smiles":"Cc1ccccc1","right_smiles":"Fc1ccccc1"}
+                """));
+        assertEquals("SUCCESS", summary.at("/result/structuredContent/status").asText(), summary.toPrettyString());
+        assertEquals(6, summary.at("/result/structuredContent/sharedCoreAtomCount").asInt());
+        assertEquals(1, summary.at("/result/structuredContent/changeGroupCount").asInt());
+        assertEquals("REPLACEMENT", summary.at("/result/structuredContent/changeTypes/0").asText());
+        assertTrue(summary.at("/result/structuredContent/summaryText").asText().contains("6-atom core"));
+        assertTrue(summary.at("/result/structuredContent/sharedCoreSmiles").isMissingNode());
+
+        JsonNode identical = call(handler, request(2, "compare_structures", """
+                {"left_smiles":"c1ccccc1","right_smiles":"c1ccccc1"}
+                """));
+        assertEquals("NO_CHANGE", identical.at("/result/structuredContent/status").asText());
+
+        call(handler, request(3, "register_structure", """
+                {"smiles":"Cc1ccccc1","structure_id":"toluene"}
+                """));
+        call(handler, request(4, "register_structure", """
+                {"smiles":"Fc1ccccc1","structure_id":"fluorobenzene"}
+                """));
+        JsonNode compact = call(handler, request(5, "compare_structures", """
+                {
+                  "left_repository_id":"session",
+                  "left_structure_id":"toluene",
+                  "right_repository_id":"session",
+                  "right_structure_id":"fluorobenzene",
+                  "output_mode":"compact"
+                }
+                """));
+        assertEquals("SUCCESS", compact.at("/result/structuredContent/summary/status").asText(), compact.toPrettyString());
+        assertTrue(compact.at("/result/structuredContent/sharedCoreSmiles").isTextual());
+        assertEquals("REPLACEMENT", compact.at("/result/structuredContent/changeGroups/0/type").asText());
+        assertTrue(compact.at("/result/structuredContent/changeGroups/0/transformText").asText().contains("->"));
+        assertTrue(compact.at("/result/structuredContent/changeGroups/0/extensionPoints/0/dummyLabel").asText().startsWith("*"));
+        assertTrue(compact.at("/result/structuredContent/changeGroups/0/removedIdcode").isMissingNode());
+
+        String path = mmpDataset().toString().replace("\\", "\\\\");
+        call(handler, request(6, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"compare_prism\"}"));
+        JsonNode full = call(handler, request(7, "compare_structures", """
+                {
+                  "session_id":"compare_prism",
+                  "left_row_id":"TOLUENE",
+                  "right_row_id":"ETHYLBENZENE",
+                  "output_mode":"full",
+                  "include_atom_mappings":true
+                }
+                """));
+        assertEquals("SUCCESS", full.at("/result/structuredContent/summary/status").asText(), full.toPrettyString());
+        assertTrue(full.at("/result/structuredContent/sharedCoreIdcode").isTextual());
+        assertTrue(full.at("/result/structuredContent/atomMappings").isArray());
+        assertTrue(full.at("/result/structuredContent/changeGroups/0/fullSignatureId").isTextual());
     }
 
     @Test
@@ -237,6 +299,89 @@ class McpJsonRpcHandlerTest {
         assertEquals(2, structures.at("/result/structuredContent/structureCount").asInt());
         assertEquals("CMP-001", structures.at("/result/structuredContent/structures/0/rowId").asText());
         assertEquals("c1ccncc1", structures.at("/result/structuredContent/structures/0/smiles").asText());
+    }
+
+    @Test
+    void canMineAnalyzeInspectAndExportPrismMmpGraphsThroughToolCalls() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String path = mmpDataset().toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"mmp_demo\"}"));
+
+        JsonNode mined = call(handler, request(2, "mine_prism_mmp_graph", """
+                {"session_id":"mmp_demo","row_set_id":"all","structure_column_id":"smiles","value_column_id":"pIC50","graph_id":"mmp_network"}
+                """));
+        assertEquals("mmp_network", mined.at("/result/structuredContent/graph/graphId").asText(), mined.toPrettyString());
+        assertEquals(1, mined.at("/result/structuredContent/configuration/maxCuts").asInt());
+        assertEquals(1, mined.at("/result/structuredContent/configuration/minTransformSupport").asInt());
+        assertEquals(16, mined.at("/result/structuredContent/configuration/maxVariableHeavyAtoms").asInt());
+        assertEquals(0.3, mined.at("/result/structuredContent/configuration/maxVariableToMolHeavyAtomFraction").asDouble(), 0.0001);
+        assertTrue(mined.at("/result/structuredContent/pairCount").asInt() > 0);
+
+        JsonNode analysis = call(handler, request(3, "analyze_prism_graph", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","limit":5}
+                """));
+        assertEquals(2, analysis.at("/result/structuredContent/sourceRowCount").asInt());
+        assertEquals(2, analysis.at("/result/structuredContent/connectedRowCount").asInt());
+        assertEquals(0, analysis.at("/result/structuredContent/isolatedSourceRowCount").asInt());
+        assertTrue(analysis.at("/result/structuredContent/topDegreeRows/0/degree").asInt() > 0);
+
+        JsonNode stats = call(handler, request(4, "inspect_prism_graph_neighborhood", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE"}
+                """));
+        assertEquals("stats", stats.at("/result/structuredContent/outputMode").asText());
+        assertEquals("TOLUENE", stats.at("/result/structuredContent/center/rowId").asText());
+        assertTrue(stats.at("/result/structuredContent/neighborCount").asInt() > 0);
+        assertTrue(stats.at("/result/structuredContent/neighbors").isMissingNode());
+
+        JsonNode compact = call(handler, request(5, "inspect_prism_graph_neighborhood", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","output_mode":"compact","limit":1}
+                """));
+        assertEquals("compact", compact.at("/result/structuredContent/outputMode").asText());
+        assertEquals(1, compact.at("/result/structuredContent/returnedNeighbors").asInt());
+        assertEquals("ETHYLBENZENE", compact.at("/result/structuredContent/neighbors/0/rowId").asText());
+        assertFalse(compact.at("/result/structuredContent/neighbors/0/edges/0/properties").isObject());
+        assertTrue(compact.at("/result/structuredContent/neighbors/0/edges/0/transformId").isTextual());
+        assertTrue(compact.at("/result/structuredContent/neighbors/0/edges/0/transformText").isTextual());
+        assertFalse(compact.at("/result/structuredContent/neighbors/0/edges/0/fromFragment").asText().isBlank());
+
+        JsonNode collapsed = call(handler, request(55, "inspect_prism_graph_neighborhood", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","output_mode":"collapsed","limit":1}
+                """));
+        assertEquals("collapsed", collapsed.at("/result/structuredContent/outputMode").asText());
+        assertEquals(1, collapsed.at("/result/structuredContent/returnedNeighbors").asInt());
+        assertTrue(collapsed.at("/result/structuredContent/neighbors/0/rawEdgeCount").asInt() >= 1);
+        assertTrue(collapsed.at("/result/structuredContent/neighbors/0/exampleTransforms/0/transformText").isTextual());
+
+        JsonNode transforms = call(handler, request(56, "summarize_prism_mmp_transforms", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","limit":5}
+                """));
+        assertTrue(transforms.at("/result/structuredContent/totalTransforms").asInt() > 0);
+        assertTrue(transforms.at("/result/structuredContent/transforms/0/transformText").isTextual());
+        assertTrue(transforms.at("/result/structuredContent/transforms/0/supportCount").asInt() > 0);
+        assertTrue(transforms.at("/result/structuredContent/transforms/0/medianDelta").isNumber());
+
+        JsonNode full = call(handler, request(6, "inspect_prism_graph_neighborhood", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","output_mode":"full","limit":1}
+                """));
+        assertTrue(full.at("/result/structuredContent/neighbors/0/edges/0/properties/transformId").isTextual());
+        assertTrue(full.at("/result/structuredContent/neighbors/0/edges/0/properties/transformText").isTextual());
+
+        JsonNode rowSet = call(handler, request(7, "create_prism_graph_neighborhood_row_set", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","center_row_id":"TOLUENE","row_set_id":"toluene_neighbors"}
+                """));
+        assertEquals("toluene_neighbors", rowSet.at("/result/structuredContent/rowSetId").asText());
+        assertEquals(2, rowSet.at("/result/structuredContent/rowCount").asInt());
+
+        JsonNode exported = call(handler, request(8, "export_prism_graph", """
+                {"session_id":"mmp_demo","graph_id":"mmp_network","format":"edges_tsv","output_name":"graphs/mmp_edges.tsv"}
+                """));
+        assertEquals("edges_tsv", exported.at("/result/structuredContent/summary/format").asText());
+        assertTrue(exported.at("/result/structuredContent/summary/rowCount").asInt() > 0);
+        assertTrue(exported.at("/result/structuredContent/tsv").isMissingNode());
+        Path artifact = Path.of(exported.at("/result/structuredContent/artifact/path").asText());
+        String tsv = Files.readString(artifact);
+        assertTrue(tsv.startsWith("edge_id	source_row_id	target_row_id"));
+        assertTrue(tsv.contains("transform_id	transform_text	key_fragment	from_fragment	to_fragment"));
     }
 
     @Test
@@ -939,6 +1084,37 @@ class McpJsonRpcHandlerTest {
             throw new IllegalStateException("Missing PrismPack test fixture");
         }
         return Path.of(resource.toURI()).getParent();
+    }
+
+    private Path mmpDataset() throws Exception {
+        Path dir = tempDir.resolve("mmp-prism-tsv");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("endpoints.prism.tsv"), String.join("\n",
+                "endpoint_id\tname\tpath\tdatatype\tendpoint_type\tevaluation_mode\tunit\tscale\tdomain_lower_bound\tdomain_upper_bound\tdescription",
+                "pIC50\tpIC50\tassay/pIC50\tNUMERIC\tMEASURED\tIMMEDIATE\tpIC50\tLOG\t0\t14\tBiochemical potency",
+                ""
+        ));
+        Files.writeString(dir.resolve("subjects.prism.tsv"), String.join("\n",
+                "subject_id\tstructure_id\tbatch_id\tproject\tseries\tsmiles",
+                "TOLUENE\tS-TOL\tB-001\tDemo\tA\tCc1ccccc1",
+                "ETHYLBENZENE\tS-ETH\tB-002\tDemo\tA\tCCc1ccccc1",
+                ""
+        ));
+        Files.writeString(dir.resolve("values.prism.tsv"), String.join("\n",
+                "subject_id\tendpoint_id\tstate\tmean\tn\traw_values",
+                "TOLUENE\tpIC50\tVALUE\t1.0\t1\t1.0",
+                "ETHYLBENZENE\tpIC50\tVALUE\t3.5\t1\t3.5",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_sets.prism.tsv"), String.join("\n",
+                "subject_set_id\tname\tset_type\tsubject_set_scope\tparent_set_id\tdescription",
+                ""
+        ));
+        Files.writeString(dir.resolve("subject_set_memberships.prism.tsv"), String.join("\n",
+                "subject_set_id\tsubject_id",
+                ""
+        ));
+        return dir;
     }
 
     private Path prismDataset() throws Exception {

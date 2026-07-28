@@ -64,10 +64,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 final class McpChemistryTools {
     private final ObjectMapper mapper;
@@ -76,6 +78,9 @@ final class McpChemistryTools {
     private final StructureSearchService searches;
     private final PrismBridgeService prism;
     private final McpArtifactService artifacts;
+    private final McpToolOutputSupport output;
+    private final StructureComparisonMcpTool comparisonTools;
+    private final PrismGraphMcpTool graphTools;
     private final SelectionAiService selections;
     private final SimilarityClusteringAiService clusterings;
     private final DecompositionAiService decompositions;
@@ -90,6 +95,9 @@ final class McpChemistryTools {
         this.searches = new OclStructureSearchService(repositories);
         this.prism = Objects.requireNonNull(prism, "prism");
         this.artifacts = new McpArtifactService(mapper);
+        this.output = new McpToolOutputSupport(artifacts);
+        this.comparisonTools = new StructureComparisonMcpTool(this.repositories, this.prism);
+        this.graphTools = new PrismGraphMcpTool(this.prism, this.artifacts, this.output);
         this.selections = new SelectionAiService(repositories);
         this.clusterings = new SimilarityClusteringAiService(repositories);
         this.decompositions = new DecompositionAiService(repositories);
@@ -232,6 +240,22 @@ final class McpChemistryTools {
                 prop("create_selection", "boolean", "Whether to store all matching structure IDs as a server-side selection."),
                 prop("selection_id", "string", "Optional selection ID when create_selection is true.")),
                 this::searchSubstructure);
+        add(result, "compare_structures", "Compares two structures with strict-MCS alignment and returns summary, compact, or full independent structural edits. Works from SMILES, repository refs, or Prism row refs.", schema(
+                prop("left_smiles", "string", "Left/input structure as SMILES."),
+                prop("right_smiles", "string", "Right/output structure as SMILES."),
+                prop("left_repository_id", "string", "Left repository ID for repository mode."),
+                prop("left_structure_id", "string", "Left structure ID for repository mode."),
+                prop("right_repository_id", "string", "Right repository ID for repository mode."),
+                prop("right_structure_id", "string", "Right structure ID for repository mode."),
+                prop("session_id", "string", "Managed Prism session ID for Prism row mode."),
+                prop("left_row_id", "string", "Left Prism row ID for Prism row mode."),
+                prop("right_row_id", "string", "Right Prism row ID for Prism row mode."),
+                prop("structure_column_id", "string", "Reserved for Prism sessions with multiple structure columns; v1 uses the session primary structure."),
+                prop("context_radius", "integer", "Core context radius around extension points. Defaults to 1."),
+                prop("output_mode", "string", "summary, compact, or full. Defaults to summary."),
+                prop("include_idcodes", "boolean", "Whether to include raw OCL IDCodes in compact output. Full mode always includes them."),
+                prop("include_atom_mappings", "boolean", "Whether to include strict-MCS atom mappings. Defaults to false.")),
+                comparisonTools::compareStructures);
         add(result, "open_prism_dataset", "Loads a PRISM TSV bundle as an in-memory dataset session.", schema(
                 required("path"),
                 prop("path", "string", "Path to a PRISM TSV bundle directory."),
@@ -486,17 +510,51 @@ final class McpChemistryTools {
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("graph_id", "string", "Prism row graph ID.")),
                 args -> prism.summarizeGraph(requiredString(args, "session_id"), requiredString(args, "graph_id")));
-        add(result, "inspect_prism_graph_neighborhood", "Inspects rows directly connected to a center row in a Prism row graph.", schema(
+        add(result, "inspect_prism_graph_neighborhood", "Inspects rows directly connected to a center row in a Prism row graph. Defaults to output_mode:stats; use collapsed for one readable row per neighbor, compact/full for raw edge drill-down.", schema(
                 required("session_id", "graph_id", "center_row_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("graph_id", "string", "Prism row graph ID."),
                 prop("center_row_id", "string", "Center Prism row ID."),
-                prop("limit", "integer", "Maximum neighbors returned. Defaults to 50.")),
-                args -> prism.inspectGraphNeighborhood(
-                        requiredString(args, "session_id"),
-                        requiredString(args, "graph_id"),
-                        requiredString(args, "center_row_id"),
-                        optionalInt(args, "limit", 50)));
+                prop("output_mode", "string", "stats, collapsed, compact, or full. Defaults to stats."),
+                prop("limit", "integer", "Maximum neighbors returned. Defaults to 10 for collapsed/compact and 50 for full."),
+                prop("transform_example_limit", "integer", "Maximum readable transform examples per collapsed neighbor. Defaults to 3."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                graphTools::inspectPrismGraphNeighborhood);
+        add(result, "summarize_prism_mmp_transforms", "Ranks readable MMP transforms from an existing Prism MMP graph without returning raw edge lists. Use pIC50/LipE/selectivity value columns at mining time for meaningful deltas.", schema(
+                required("session_id", "graph_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism MMP graph ID."),
+                prop("min_support", "integer", "Minimum transform support. Defaults to 1."),
+                prop("sort_by", "string", "support_desc, median_delta_desc, median_delta_asc, abs_median_delta_desc, or transform_text. Defaults to support_desc."),
+                prop("offset", "integer", "Zero-based transform offset."),
+                prop("limit", "integer", "Maximum transform rows returned. Defaults to 50."),
+                prop("example_limit", "integer", "Maximum example edge/source/target IDs per transform. Defaults to 3."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                graphTools::summarizePrismMmpTransforms);
+        add(result, "analyze_prism_graph", "Returns compact global graph statistics such as degree distribution and high-degree rows without returning edge lists.", schema(
+                required("session_id", "graph_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID."),
+                prop("limit", "integer", "Maximum high-degree rows returned. Defaults to 20."),
+                prop("output_target", "string", "response or file. Defaults to response."),
+                prop("output_name", "string", "Optional relative artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
+                prop("format", "string", "Artifact format. Only json is supported.")),
+                graphTools::analyzePrismGraph);
+        add(result, "export_prism_graph", "Writes a Prism row graph as a TSV artifact for Python/DuckDB/networkx analysis; graph rows are never returned inline.", schema(
+                required("session_id", "graph_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("graph_id", "string", "Prism row graph ID."),
+                prop("format", "string", "edges_tsv or nodes_tsv. Defaults to edges_tsv."),
+                prop("output_name", "string", "Optional relative TSV artifact path inside the managed artifact directory."),
+                prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact.")),
+                graphTools::exportPrismGraph);
         add(result, "create_prism_graph_neighborhood_row_set", "Creates a Prism row set from rows connected to a center row in a row graph.", schema(
                 required("session_id", "graph_id", "center_row_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -522,10 +580,10 @@ final class McpChemistryTools {
                 prop("value_column_id", "string", "Optional numeric value column used for edge deltas."),
                 prop("graph_id", "string", "Optional output graph ID."),
                 prop("label", "string", "Optional graph label."),
-                prop("max_cuts", "integer", "Maximum cuts, 1 or 2. Defaults to Structurized MMP default."),
-                prop("min_transform_support", "integer", "Minimum transform support. Defaults to Structurized MMP default."),
-                prop("max_variable_heavy_atoms", "integer", "Maximum variable fragment heavy atoms."),
-                prop("max_variable_to_mol_heavy_atom_fraction", "number", "Maximum variable fragment fraction."),
+                prop("max_cuts", "integer", "Maximum cuts, 1 or 2. Defaults to 1 for agent-facing MMP graphs."),
+                prop("min_transform_support", "integer", "Minimum transform support. Defaults to 1 for agent-facing MMP graphs."),
+                prop("max_variable_heavy_atoms", "integer", "Maximum variable fragment heavy atoms. Defaults to 16 for agent-facing MMP graphs."),
+                prop("max_variable_to_mol_heavy_atom_fraction", "number", "Maximum variable fragment fraction. Defaults to 0.3 for agent-facing MMP graphs."),
                 prop("max_fragmentation_records_per_compound", "integer", "Per-compound fragmentation cap."),
                 prop("max_pairs_per_key", "integer", "Maximum pairs emitted for one constant key.")),
                 args -> prism.mineMmpGraph(new MinePrismMmpGraphRequest(
@@ -535,10 +593,10 @@ final class McpChemistryTools {
                         optionalString(args, "value_column_id", null),
                         optionalString(args, "graph_id", null),
                         optionalString(args, "label", null),
-                        optionalInteger(args, "max_cuts"),
-                        optionalInteger(args, "min_transform_support"),
-                        optionalInteger(args, "max_variable_heavy_atoms"),
-                        optionalDouble(args, "max_variable_to_mol_heavy_atom_fraction", null),
+                        optionalInt(args, "max_cuts", 1),
+                        optionalInt(args, "min_transform_support", 1),
+                        optionalInt(args, "max_variable_heavy_atoms", 16),
+                        optionalDouble(args, "max_variable_to_mol_heavy_atom_fraction", 0.3),
                         optionalInteger(args, "max_fragmentation_records_per_compound"),
                         optionalInteger(args, "max_pairs_per_key"))));
         add(result, "summarize_prism_row_set_by_columns", "Summarizes runtime Prism columns for one row set without materializing a repository. Numeric columns return distribution statistics; other columns return top formatted values.", schema(
@@ -946,13 +1004,13 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns or cluster_prism_row_set -> summarize_prism_grouping_by_columns/get_prism_clustering for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
-                    Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths.
+                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns or mine_prism_mmp_graph -> analyze_prism_graph/inspect_prism_graph_neighborhood for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths. Use topic:mmp_graph_workflow for MMP graph strategy.
                     """;
             case "payload_hygiene" -> """
                     # Payload Hygiene
                     search_substructure defaults to output_mode:count. Request output_mode:ids for compact rows and output_mode:full only when atom mappings are needed.
-                    get_clustering and get_cluster are summaries; get_cluster_members and get_selection_members are paged drill-down tools.
+                    get_clustering and get_cluster are summaries; get_cluster_members and get_selection_members are paged drill-down tools. inspect_prism_graph_neighborhood defaults to output_mode:stats; request compact or full explicitly.
                     Prefer create_selection:true plus summarize_selection_by_endpoint when analyzing endpoint distributions for search hits or cluster members. Use create_endpoint_selection for numeric potency/property and endpoint measurement-date filters without fetching value rows. Use create_subject_measurement_date_selection to find subjects whose first or last measured endpoint date is recent. Use combine_selections for union/merge, intersect, and subtract without copying IDs into context. evaluate_decomposition accepts selection_id, and export_selection_table writes TSV artifacts for Python/DuckDB without inline rows.
                     """;
             case "prism_workflow" -> """
@@ -967,6 +1025,13 @@ final class McpChemistryTools {
                     For a managed Prism session, create a scope with create_prism_column_row_set and run cluster_prism_row_set with a SkelSpheres threshold around 0.75-0.85. Structurized retains the rich artifact while Prism receives a reusable grouping; publish_columns also shows its categorical facet and adds representative similarity.
                     Use list_prism_groupings and get_prism_grouping for provider-neutral inspection. Use summarize_prism_grouping_by_columns to compare runtime endpoint/category columns across groups without returning member rows. Use get_prism_clustering and get_prism_cluster_members for rich clustering details. Call create_prism_group_row_set, or the compatibility create_prism_cluster_row_set, only for groups that should become named reusable scopes.
                     The repository-based cluster_structures, get_clustering, get_cluster_members, and summarize_clusters_by_endpoint tools remain available for standalone chemistry repositories and legacy materialized-dataset workflows.
+                    """;
+            case "mmp_graph_workflow" -> """
+                    # MMP Graph Workflow
+                    Use mine_prism_mmp_graph on managed Prism sessions. Recommended default profile is max_cuts:1, min_transform_support:1, max_variable_heavy_atoms:16, max_variable_to_mol_heavy_atom_fraction:0.3; omit these arguments unless there is a specific reason to change them.
+                    Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
+                    Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.
+                    Use create_prism_graph_neighborhood_row_set to turn a center-row neighborhood into a reusable Prism row set, then summarize_prism_row_set_by_columns for endpoint/SAR context. Use export_prism_graph with format:edges_tsv or nodes_tsv when Python/DuckDB/networkx should analyze the full graph outside the MCP context; edge TSV includes readable transform columns plus raw IDCodes.
                     """;
             case "decomposition_rules" -> """
                     # Decomposition Rules
@@ -1227,6 +1292,7 @@ final class McpChemistryTools {
             default -> false;
         };
     }
+
 
     private Object getClusterMembers(ObjectNode args) {
         String clusteringId = requiredString(args, "clustering_id");
@@ -2622,8 +2688,4 @@ final class McpChemistryTools {
 
     private record Property(String name, Map<String, Object> schema) {}
 
-    @FunctionalInterface
-    private interface ToolHandler {
-        Object call(ObjectNode args) throws Exception;
-    }
 }

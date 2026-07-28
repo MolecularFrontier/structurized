@@ -166,6 +166,11 @@ final class PrismMmpGraphService {
             properties.put("fromValueIdcode", pair.fromValueIdcode());
             properties.put("toValueIdcode", pair.toValueIdcode());
             properties.put("transformId", pair.transformId());
+            PrismMmpTransformText transform = PrismMmpTransformRenderer.render(properties);
+            if (transform.keyFragment() != null) properties.put("keyFragment", transform.keyFragment());
+            if (transform.fromFragment() != null) properties.put("fromFragment", transform.fromFragment());
+            if (transform.toFragment() != null) properties.put("toFragment", transform.toFragment());
+            if (transform.transformText() != null) properties.put("transformText", transform.transformText());
             if (pair.valueA() != null) properties.put("valueA", pair.valueA());
             if (pair.valueB() != null) properties.put("valueB", pair.valueB());
             if (pair.delta() != null) properties.put("delta", pair.delta());

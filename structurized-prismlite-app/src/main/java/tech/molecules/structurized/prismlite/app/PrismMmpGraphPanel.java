@@ -55,8 +55,8 @@ final class PrismMmpGraphPanel extends JPanel {
     private final JTextField label = new JTextField();
     private final JTextField maxCuts = new JTextField("1");
     private final JTextField minSupport = new JTextField("1");
-    private final JTextField maxVariableAtoms = new JTextField("4");
-    private final JTextField maxVariableFraction = new JTextField("1.0");
+    private final JTextField maxVariableAtoms = new JTextField("16");
+    private final JTextField maxVariableFraction = new JTextField("0.3");
     private final JTextArea details = new JTextArea();
     private final JLabel status = new JLabel(" ");
 
