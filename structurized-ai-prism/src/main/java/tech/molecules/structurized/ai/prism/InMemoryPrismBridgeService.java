@@ -72,6 +72,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     private final PrismArtifactRegistry artifactRegistry;
     private final PrismGroupingClusteringService clustering;
     private final PrismMmpGraphService mmpGraphs;
+    private final PrismSimilarityGraphService similarityGraphs;
     private final PrismPredictionService predictions;
     private final PrismSessionRegistry sessionRegistry;
     private final OclMoleculeDocumentCodec moleculeCodec = new OclMoleculeDocumentCodec();
@@ -100,6 +101,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         this.artifactRegistry = Objects.requireNonNull(artifactRegistry, "artifactRegistry");
         this.clustering = new PrismGroupingClusteringService(this.artifactRegistry);
         this.mmpGraphs = new PrismMmpGraphService();
+        this.similarityGraphs = new PrismSimilarityGraphService();
         this.predictions = new PrismPredictionService(this.artifactRegistry, Objects.requireNonNull(predictionRegistry, "predictionRegistry"));
     }
 
@@ -324,6 +326,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 graph.rowIds().size(),
                 isolatedSourceRowCount,
                 degreeStats(nodeStats),
+                graphSimilarityStats(graph),
                 safeLimit,
                 nodeStats.stream().limit(safeLimit).toList()
         );
@@ -622,6 +625,17 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return mmpGraphs.mine(session, sourceRowSet, request);
     }
 
+    @Override
+    public synchronized PrismSimilarityGraphSummary mineSimilarityGraph(MinePrismSimilarityGraphRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
+                ? "all"
+                : request.rowSetId().trim();
+        PrismRowSet sourceRowSet = rowSet(session, rowSetId);
+        return similarityGraphs.mine(session, sourceRowSet, request);
+    }
+
 
     private static PrismGraphDegreeStats degreeStats(List<PrismGraphNodeStat> nodeStats) {
         if (nodeStats.isEmpty()) {
@@ -635,6 +649,31 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 ? degrees.get(size / 2)
                 : (degrees.get(size / 2 - 1) + degrees.get(size / 2)) / 2.0;
         return new PrismGraphDegreeStats(min, median, max);
+    }
+
+    private static PrismGraphSimilarityStats graphSimilarityStats(PrismRowGraph graph) {
+        ArrayList<Double> similarities = new ArrayList<>();
+        int mutualKnnCount = 0;
+        LinkedHashMap<String, Integer> sourceCounts = new LinkedHashMap<>();
+        for (PrismRowGraphEdge edge : graph.edges()) {
+            Double similarity = propertyDouble(edge.properties(), "similarity");
+            if (similarity == null || Double.isNaN(similarity)) {
+                continue;
+            }
+            similarities.add(similarity);
+            if (Boolean.TRUE.equals(edge.properties().get("mutualKnn"))) {
+                mutualKnnCount++;
+            }
+            String source = propertyText(edge.properties(), "edgeSource");
+            if (source != null && !source.isBlank()) {
+                sourceCounts.merge(source, 1, Integer::sum);
+            }
+        }
+        if (similarities.isEmpty()) {
+            return null;
+        }
+        similarities.sort(Double::compareTo);
+        return PrismSimilarityGraphService.similarityStats(similarities, mutualKnnCount, sourceCounts);
     }
 
     private static LinkedHashMap<String, Integer> graphRadiusDistances(PrismRowGraph graph, String centerRowId, int maxDepth) {
@@ -717,7 +756,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     private static PrismGraphTsvExport exportGraphEdges(ManagedPrismSession session, PrismRowGraph graph) {
         StringBuilder builder = new StringBuilder();
-        builder.append("edge_id\tsource_row_id\ttarget_row_id\tlabel\ttransform_id\ttransform_text\tkey_fragment\tfrom_fragment\tto_fragment\tcut_count\tdelta\tvalue_a\tvalue_b\tkey_idcode\tfrom_value_idcode\tto_value_idcode\n");
+        builder.append("edge_id	source_row_id	target_row_id	label	relation_type	similarity	edge_source	descriptor	rank_a_to_b	rank_b_to_a	mutual_knn	transform_id	transform_text	key_fragment	from_fragment	to_fragment	cut_count	delta	value_a	value_b	key_idcode	from_value_idcode	to_value_idcode\n");
         for (PrismRowGraphEdge edge : graph.edges()) {
             Map<String, Object> properties = edge.properties();
             PrismMmpTransformText transform = PrismMmpTransformRenderer.render(properties);
@@ -726,6 +765,13 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                     edge.sourceRowId(),
                     edge.targetRowId(),
                     edge.label(),
+                    propertyText(properties, "relationType"),
+                    propertyText(properties, "similarity"),
+                    propertyText(properties, "edgeSource"),
+                    propertyText(properties, "descriptor"),
+                    propertyText(properties, "rankAtoB"),
+                    propertyText(properties, "rankBtoA"),
+                    propertyText(properties, "mutualKnn"),
                     propertyText(properties, "transformId"),
                     transform.transformText(),
                     transform.keyFragment(),

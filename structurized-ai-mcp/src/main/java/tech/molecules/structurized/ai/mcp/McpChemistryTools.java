@@ -37,6 +37,7 @@ import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromSubjectSetReque
 import tech.molecules.structurized.ai.prism.CombinePrismRowSetsRequest;
 import tech.molecules.structurized.ai.prism.EvaluatePrismPredictionRequest;
 import tech.molecules.structurized.ai.prism.MinePrismMmpGraphRequest;
+import tech.molecules.structurized.ai.prism.MinePrismSimilarityGraphRequest;
 import tech.molecules.structurized.ai.prism.InMemoryPrismBridgeService;
 import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
@@ -698,6 +699,31 @@ final class McpChemistryTools {
                         optionalDouble(args, "max_variable_to_mol_heavy_atom_fraction", 0.3),
                         optionalInteger(args, "max_fragmentation_records_per_compound"),
                         optionalInteger(args, "max_pairs_per_key"))));
+        add(result, "mine_prism_similarity_graph", "Mines a chemical similarity network from a Prism structure column and publishes it as a Prism row graph. Defaults to SkeletonSpheres hybrid top-5 plus similarity >= 0.85.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("row_set_id", "string", "Source Prism row set. Defaults to all."),
+                prop("structure_column_id", "string", "Structure column ID. Defaults to the first structure column."),
+                prop("graph_id", "string", "Optional output graph ID."),
+                prop("label", "string", "Optional graph label."),
+                prop("descriptor", "string", "Descriptor name. Only skelspheres is supported; defaults to skelspheres."),
+                prop("mode", "string", "knn, threshold, or hybrid. Defaults to hybrid."),
+                prop("neighbor_count", "integer", "Top neighbors per row for knn/hybrid modes. Defaults to 5."),
+                prop("similarity_threshold", "number", "Similarity cutoff for threshold/hybrid modes. Defaults to 0.85."),
+                prop("mutual_knn_only", "boolean", "Whether to keep only edges where both rows are in each other's top-k list. Defaults to false."),
+                prop("max_edges", "integer", "Optional safety cap; mining fails if the graph would exceed this many edges.")),
+                args -> prism.mineSimilarityGraph(new MinePrismSimilarityGraphRequest(
+                        requiredString(args, "session_id"),
+                        optionalString(args, "row_set_id", "all"),
+                        optionalString(args, "structure_column_id", null),
+                        optionalString(args, "graph_id", null),
+                        optionalString(args, "label", null),
+                        optionalString(args, "descriptor", null),
+                        optionalString(args, "mode", null),
+                        optionalInteger(args, "neighbor_count"),
+                        optionalDouble(args, "similarity_threshold", null),
+                        optionalNullableBoolean(args, "mutual_knn_only"),
+                        optionalInteger(args, "max_edges"))));
         add(result, "summarize_prism_row_set_by_columns", "Summarizes runtime Prism columns for one row set without materializing a repository. Numeric columns return distribution statistics; other columns return top formatted values.", schema(
                 required("session_id", "row_set_id", "column_ids"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -1103,7 +1129,7 @@ final class McpChemistryTools {
             case "overview" -> """
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
-                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns or mine_prism_mmp_graph -> analyze_prism_graph/inspect_prism_graph_neighborhood for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    Main flows: open_prism_pack -> describe_prism_session_for_agent -> create_prism_column_row_set -> summarize_prism_row_set_by_columns, mine_prism_mmp_graph, or mine_prism_similarity_graph -> analyze_prism_graph/inspect_prism_graph_neighborhood for session-native analysis; open_prism_dataset -> materialize_prism_subject_set -> cluster_structures remains available for standalone repository workflows; search_substructure(create_selection:true) and create_endpoint_selection -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths. Use topic:mmp_graph_workflow and topic:scaffold_sar_workflow for graph and scaffold SAR strategies.
                     """;
             case "payload_hygiene" -> """
@@ -1127,7 +1153,7 @@ final class McpChemistryTools {
                     """;
             case "mmp_graph_workflow" -> """
                     # MMP Graph Workflow
-                    Use mine_prism_mmp_graph on managed Prism sessions. Recommended default profile is max_cuts:1, min_transform_support:1, max_variable_heavy_atoms:16, max_variable_to_mol_heavy_atom_fraction:0.3; omit these arguments unless there is a specific reason to change them.
+                    Use mine_prism_mmp_graph on managed Prism sessions for strict matched-pair SAR. Recommended default profile is max_cuts:1, min_transform_support:1, max_variable_heavy_atoms:16, max_variable_to_mol_heavy_atom_fraction:0.3; omit these arguments unless there is a specific reason to change them. Use mine_prism_similarity_graph for broader related-chemistry maps that connect compounds by SkeletonSpheres similarity even when no MMP edge exists; recommended defaults are mode:hybrid, neighbor_count:5, similarity_threshold:0.85.
                     Start with analyze_prism_graph for global orientation: edge count, connected coverage, isolated source rows, degree statistics, and high-degree rows. Then call inspect_prism_graph_neighborhood with output_mode:stats for a row, output_mode:collapsed for one readable row per neighbor, output_mode:compact for bounded raw neighbor transforms, or output_mode:full only for detailed edge properties.
                     Use find_prism_graph_shortest_path for cheap questions like "are these compounds connected and how many MMP hops apart?" It defaults to output_mode:stats for only connectivity and distance; use output_mode:compact with include_path:true for one deterministic short path with bounded readable transform examples. Reserve output_mode:full for debugging because it includes full row fields and graph metadata.
                     Use summarize_prism_mmp_transforms to rank readable transforms by support or delta without returning raw edge lists. Mine against pIC50, LipE, or selectivity columns when delta signs should have SAR meaning; raw IC50/nM columns produce raw numeric deltas.

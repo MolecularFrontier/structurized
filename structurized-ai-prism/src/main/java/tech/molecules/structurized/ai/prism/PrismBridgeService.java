@@ -51,6 +51,8 @@ public interface PrismBridgeService {
 
     PrismMmpGraphSummary mineMmpGraph(MinePrismMmpGraphRequest request);
 
+    PrismSimilarityGraphSummary mineSimilarityGraph(MinePrismSimilarityGraphRequest request);
+
     PrismGroupingView getGrouping(String sessionId, String groupingId, int offset, int limit);
 
     PrismRowSetSummary createGroupRowSet(CreatePrismGroupRowSetRequest request);

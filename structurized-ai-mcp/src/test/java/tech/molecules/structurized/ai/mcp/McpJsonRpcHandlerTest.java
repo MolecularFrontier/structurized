@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(94, tools.size());
+        assertEquals(95, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -97,6 +97,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "summarize_prism_mmp_transforms"));
         assertTrue(hasTool(tools, "create_prism_graph_neighborhood_row_set"));
         assertTrue(hasTool(tools, "mine_prism_mmp_graph"));
+        assertTrue(hasTool(tools, "mine_prism_similarity_graph"));
         assertTrue(hasTool(tools, "discover_prism_scaffolds"));
         assertTrue(hasTool(tools, "analyze_prism_scaffold"));
         assertTrue(hasTool(tools, "get_prism_scaffold_projection"));
@@ -427,7 +428,34 @@ class McpJsonRpcHandlerTest {
         Path artifact = Path.of(exported.at("/result/structuredContent/artifact/path").asText());
         String tsv = Files.readString(artifact);
         assertTrue(tsv.startsWith("edge_id	source_row_id	target_row_id"));
-        assertTrue(tsv.contains("transform_id	transform_text	key_fragment	from_fragment	to_fragment"));
+        assertTrue(tsv.contains("relation_type	similarity	edge_source	descriptor"));
+        assertTrue(tsv.contains("transform_id"));
+        assertTrue(tsv.contains("transform_text"));
+        assertTrue(tsv.contains("key_fragment"));
+        assertTrue(tsv.contains("from_fragment"));
+        assertTrue(tsv.contains("to_fragment"));
+
+        JsonNode similarity = call(handler, request(61, "mine_prism_similarity_graph", """
+                {"session_id":"mmp_demo","row_set_id":"all","structure_column_id":"smiles","graph_id":"similarity_network","mode":"knn","neighbor_count":1}
+                """));
+        assertEquals("similarity_network", similarity.at("/result/structuredContent/graph/graphId").asText(), similarity.toPrettyString());
+        assertEquals("chemistry.similarity", similarity.at("/result/structuredContent/graph/graphType").asText());
+        assertEquals(1, similarity.at("/result/structuredContent/edgeCount").asInt());
+        assertEquals(1, similarity.at("/result/structuredContent/similarity/edgeCount").asInt());
+        assertEquals(1, similarity.at("/result/structuredContent/similarity/edgeSourceCounts/knn").asInt());
+
+        JsonNode similarityAnalysis = call(handler, request(62, "analyze_prism_graph", """
+                {"session_id":"mmp_demo","graph_id":"similarity_network","limit":5}
+                """));
+        assertEquals(1, similarityAnalysis.at("/result/structuredContent/similarity/edgeCount").asInt());
+        assertTrue(similarityAnalysis.at("/result/structuredContent/similarity/median").isNumber());
+
+        JsonNode similarityNeighborhood = call(handler, request(63, "inspect_prism_graph_neighborhood", """
+                {"session_id":"mmp_demo","graph_id":"similarity_network","center_row_id":"TOLUENE","output_mode":"compact","limit":1}
+                """));
+        assertEquals("chemical_similarity", similarityNeighborhood.at("/result/structuredContent/neighbors/0/edges/0/relationType").asText());
+        assertEquals("knn", similarityNeighborhood.at("/result/structuredContent/neighbors/0/edges/0/edgeSource").asText());
+        assertTrue(similarityNeighborhood.at("/result/structuredContent/neighbors/0/edges/0/similarity").isNumber());
     }
 
     @Test

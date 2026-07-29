@@ -8,6 +8,7 @@ public record PrismGraphAnalysis(
         int connectedRowCount,
         int isolatedSourceRowCount,
         PrismGraphDegreeStats degree,
+        PrismGraphSimilarityStats similarity,
         int topNodeLimit,
         List<PrismGraphNodeStat> topDegreeRows
 ) {

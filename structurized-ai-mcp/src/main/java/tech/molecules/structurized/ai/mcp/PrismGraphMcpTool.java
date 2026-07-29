@@ -206,7 +206,10 @@ final class PrismGraphMcpTool {
                 propertyString(properties, "fromFragment"),
                 propertyString(properties, "toFragment"),
                 propertyInteger(properties, "cutCount"),
-                propertyDouble(properties, "delta"));
+                propertyDouble(properties, "delta"),
+                propertyString(properties, "relationType"),
+                propertyDouble(properties, "similarity"),
+                propertyString(properties, "edgeSource"));
     }
 
     private static CompactPrismGraphShortestPath compactShortestPath(PrismGraphShortestPath path, String outputMode, boolean includePath) {
@@ -381,7 +384,10 @@ final class PrismGraphMcpTool {
             String fromFragment,
             String toFragment,
             Integer cutCount,
-            Double delta
+            Double delta,
+            String relationType,
+            Double similarity,
+            String edgeSource
     ) {}
 
     private record CompactPrismGraphShortestPath(

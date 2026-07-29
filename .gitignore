@@ -61,3 +61,4 @@ desktop.ini
 
 # Environment / secrets (never commit!)
 .env
+/docs/MCP_KIRO_SETUP.md

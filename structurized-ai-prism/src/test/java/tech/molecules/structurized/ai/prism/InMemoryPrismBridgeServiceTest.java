@@ -323,6 +323,55 @@ class InMemoryPrismBridgeServiceTest {
     }
 
     @Test
+    void minesSimilarityGraphAsReusablePrismGraph() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(mmpDataset(), "similarity_demo", "Similarity demo"));
+
+        PrismSimilarityGraphSummary mined = ctx.prism.mineSimilarityGraph(new MinePrismSimilarityGraphRequest(
+                "similarity_demo",
+                "all",
+                "smiles",
+                "similarity_network",
+                "Similarity network",
+                null,
+                "knn",
+                1,
+                null,
+                null,
+                null
+        ));
+        PrismGraphSummary summary = ctx.prism.summarizeGraph("similarity_demo", "similarity_network");
+        PrismGraphAnalysis analysis = ctx.prism.analyzeGraph("similarity_demo", "similarity_network", 5);
+        PrismGraphNeighborhood neighborhood = ctx.prism.inspectGraphNeighborhood(
+                "similarity_demo", "similarity_network", "TOLUENE", 10);
+        PrismGraphShortestPath path = ctx.prism.findGraphShortestPath(
+                "similarity_demo", "similarity_network", "TOLUENE", "ETHYLBENZENE", false, 0, 2);
+
+        assertEquals("similarity_network", mined.graph().graphId());
+        assertEquals("chemistry.similarity", mined.graph().graphType());
+        assertEquals("structurized-similarity", mined.graph().pluginId());
+        assertEquals("knn", mined.configuration().get("mode"));
+        assertEquals(2, mined.validStructureCount());
+        assertEquals(1, mined.edgeCount());
+        assertEquals(1, mined.similarity().edgeCount());
+        assertEquals(1, mined.similarity().mutualKnnEdgeCount());
+        assertEquals(1, mined.similarity().edgeSourceCounts().get("knn"));
+        assertEquals(1, summary.edgeCount());
+        assertEquals(1, analysis.similarity().edgeCount());
+        assertEquals(2, analysis.connectedRowCount());
+        assertEquals(0, analysis.isolatedSourceRowCount());
+        assertEquals(1, neighborhood.neighborCount());
+        assertEquals("chemical_similarity", neighborhood.neighbors().getFirst().edges().getFirst().properties().get("relationType"));
+        assertTrue(path.connected());
+        assertEquals(1, path.distance());
+
+        ChemOperationException invalidMode = assertThrows(ChemOperationException.class,
+                () -> ctx.prism.mineSimilarityGraph(new MinePrismSimilarityGraphRequest(
+                        "similarity_demo", "all", "smiles", "bad_similarity", null, null, "bogus", 1, null, null, null)));
+        assertEquals("invalid_similarity_graph_mode", invalidMode.code());
+    }
+
+    @Test
     void graphShortestPathHonorsDepthBeyondTwoAndMissReasons() throws Exception {
         TestContext ctx = context();
         ctx.prism.openDataset(new OpenPrismDatasetRequest(chainGraphDataset(), "chain_demo", "Chain graph demo"));
