@@ -28,7 +28,7 @@
         <dependency>
             <groupId>tech.molecules</groupId>
             <artifactId>chemflow-ocl</artifactId>
-            <version>0.2.2</version>
+            <version>0.2.3</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

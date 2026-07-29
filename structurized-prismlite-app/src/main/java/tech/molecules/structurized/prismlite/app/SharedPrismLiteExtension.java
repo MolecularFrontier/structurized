@@ -46,13 +46,14 @@ public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
         ManagedPrismSession managed = registry.findByWorkspace(context.session()).orElseThrow();
         context.frame().setTitle(context.frame().getTitle() + " [" + managed.sessionId() + "]");
         context.registerViewRenderer(new ChemFlowGraphNeighborhoodViewRenderer());
+        context.registerViewRenderer(new ChemFlowProjectRiverViewRenderer());
         PrismMoleculeWorkspacePanel moleculePanel = new PrismMoleculeWorkspacePanel(
                 managed.moleculeWorkspace(),
                 context.workspace().model(),
                 context.workspace()::focusColumnInspector
         );
         context.workspace().addApplicationTab("molecules", "Molecules", moleculePanel);
-        context.workspace().addApplicationTab("mmp", "MMP Graphs", new PrismMmpGraphPanel(
+        context.workspace().addApplicationTab("graphs", "Graphs", new PrismMmpGraphPanel(
                 bridge,
                 managed.sessionId(),
                 context.workspace().model(),

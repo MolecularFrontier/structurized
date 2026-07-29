@@ -3,11 +3,13 @@ package tech.molecules.structurized.prismlite.app;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.prism.CreatePrismGraphNeighborhoodRowSetRequest;
 import tech.molecules.structurized.ai.prism.MinePrismMmpGraphRequest;
+import tech.molecules.structurized.ai.prism.MinePrismSimilarityGraphRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.prism.PrismColumnSummary;
 import tech.molecules.structurized.ai.prism.PrismGraphNeighborhood;
 import tech.molecules.structurized.ai.prism.PrismGraphSummary;
 import tech.molecules.structurized.ai.prism.PrismMmpGraphSummary;
+import tech.molecules.structurized.ai.prism.PrismSimilarityGraphSummary;
 import tech.molecules.structurized.ai.prism.PrismRowSetSummary;
 import tech.molecules.structurized.prism.engine.PrismViewRecord;
 import tech.molecules.structurized.prism.engine.RowGraphNeighborhoodViewSpec;
@@ -18,6 +20,7 @@ import javax.swing.Box;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -30,6 +33,7 @@ import javax.swing.JTextField;
 import javax.swing.JToolBar;
 import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Dimension;
 import java.time.Instant;
 import java.util.List;
@@ -47,6 +51,7 @@ final class PrismMmpGraphPanel extends JPanel {
     private final DefaultComboBoxModel<ColumnItem> structureColumns = new DefaultComboBoxModel<>();
     private final DefaultComboBoxModel<ColumnItem> valueColumns = new DefaultComboBoxModel<>();
     private final DefaultListModel<GraphItem> graphModel = new DefaultListModel<>();
+    private final JComboBox<GraphMiningMode> miningMode = new JComboBox<>(GraphMiningMode.values());
     private final JComboBox<RowSetItem> rowSetSelector = new JComboBox<>(rowSets);
     private final JComboBox<ColumnItem> structureColumnSelector = new JComboBox<>(structureColumns);
     private final JComboBox<ColumnItem> valueColumnSelector = new JComboBox<>(valueColumns);
@@ -57,6 +62,11 @@ final class PrismMmpGraphPanel extends JPanel {
     private final JTextField minSupport = new JTextField("1");
     private final JTextField maxVariableAtoms = new JTextField("16");
     private final JTextField maxVariableFraction = new JTextField("0.3");
+    private final JComboBox<SimilarityMode> similarityMode = new JComboBox<>(SimilarityMode.values());
+    private final JTextField similarityNeighborCount = new JTextField("5");
+    private final JTextField similarityThreshold = new JTextField("0.85");
+    private final JCheckBox similarityMutualKnnOnly = new JCheckBox("Mutual KNN only", false);
+    private final JTextField similarityMaxEdges = new JTextField();
     private final JTextArea details = new JTextArea();
     private final JLabel status = new JLabel(" ");
 
@@ -92,17 +102,58 @@ final class PrismMmpGraphPanel extends JPanel {
     private JPanel form() {
         JPanel panel = new JPanel(new BorderLayout(6, 4));
         panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 4, 8));
+        JPanel common = new JPanel(new java.awt.GridLayout(0, 4, 6, 4));
+        common.add(new JLabel("Graph type"));
+        common.add(miningMode);
+        common.add(new JLabel("Rows"));
+        common.add(rowSetSelector);
+        common.add(new JLabel("Structure"));
+        common.add(structureColumnSelector);
+        common.add(new JLabel("Value"));
+        common.add(valueColumnSelector);
+        common.add(new JLabel("Graph ID"));
+        common.add(graphId);
+        common.add(new JLabel("Label"));
+        common.add(label);
+
+        CardLayout cards = new CardLayout();
+        JPanel miningOptions = new JPanel(cards);
+        miningOptions.add(mmpOptionsPanel(), GraphMiningMode.MMP.name());
+        miningOptions.add(similarityOptionsPanel(), GraphMiningMode.SIMILARITY.name());
+        miningMode.addActionListener(event -> cards.show(miningOptions, selectedMiningMode().name()));
+
+        JPanel formBody = new JPanel(new BorderLayout(0, 4));
+        formBody.add(common, BorderLayout.NORTH);
+        formBody.add(miningOptions, BorderLayout.CENTER);
+        panel.add(formBody, BorderLayout.CENTER);
+
+        JToolBar toolbar = new JToolBar();
+        toolbar.setFloatable(false);
+        JButton refresh = new JButton("Refresh");
+        refresh.addActionListener(event -> refreshLists());
+        JButton mine = new JButton("Mine Graph");
+        mine.addActionListener(event -> mineGraph());
+        JButton inspect = new JButton("Inspect Focused Row");
+        inspect.addActionListener(event -> inspectFocusedRow());
+        JButton rowSet = new JButton("Create Row Set");
+        rowSet.addActionListener(event -> createNeighborhoodRowSet());
+        JButton chemFlow = new JButton("Open ChemFlow Neighborhood");
+        chemFlow.addActionListener(event -> openChemFlowNeighborhood());
+        JButton projectRiver = new JButton("Open Project River");
+        projectRiver.addActionListener(event -> openProjectRiver());
+        toolbar.add(refresh);
+        toolbar.add(mine);
+        toolbar.add(Box.createHorizontalGlue());
+        toolbar.add(inspect);
+        toolbar.add(rowSet);
+        toolbar.add(chemFlow);
+        toolbar.add(projectRiver);
+        panel.add(toolbar, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel mmpOptionsPanel() {
         JPanel grid = new JPanel(new java.awt.GridLayout(0, 4, 6, 4));
-        grid.add(new JLabel("Rows"));
-        grid.add(rowSetSelector);
-        grid.add(new JLabel("Structure"));
-        grid.add(structureColumnSelector);
-        grid.add(new JLabel("Value"));
-        grid.add(valueColumnSelector);
-        grid.add(new JLabel("Graph ID"));
-        grid.add(graphId);
-        grid.add(new JLabel("Label"));
-        grid.add(label);
         grid.add(new JLabel("Max cuts"));
         grid.add(maxCuts);
         grid.add(new JLabel("Min support"));
@@ -111,28 +162,22 @@ final class PrismMmpGraphPanel extends JPanel {
         grid.add(maxVariableAtoms);
         grid.add(new JLabel("Max variable fraction"));
         grid.add(maxVariableFraction);
-        panel.add(grid, BorderLayout.CENTER);
+        return grid;
+    }
 
-        JToolBar toolbar = new JToolBar();
-        toolbar.setFloatable(false);
-        JButton refresh = new JButton("Refresh");
-        refresh.addActionListener(event -> refreshLists());
-        JButton mine = new JButton("Mine MMP Network");
-        mine.addActionListener(event -> mineGraph());
-        JButton inspect = new JButton("Inspect Focused Row");
-        inspect.addActionListener(event -> inspectFocusedRow());
-        JButton rowSet = new JButton("Create Row Set");
-        rowSet.addActionListener(event -> createNeighborhoodRowSet());
-        JButton chemFlow = new JButton("Open ChemFlow Neighborhood");
-        chemFlow.addActionListener(event -> openChemFlowNeighborhood());
-        toolbar.add(refresh);
-        toolbar.add(mine);
-        toolbar.add(Box.createHorizontalGlue());
-        toolbar.add(inspect);
-        toolbar.add(rowSet);
-        toolbar.add(chemFlow);
-        panel.add(toolbar, BorderLayout.SOUTH);
-        return panel;
+    private JPanel similarityOptionsPanel() {
+        JPanel grid = new JPanel(new java.awt.GridLayout(0, 4, 6, 4));
+        grid.add(new JLabel("Mode"));
+        grid.add(similarityMode);
+        grid.add(new JLabel("Neighbors"));
+        grid.add(similarityNeighborCount);
+        grid.add(new JLabel("Similarity threshold"));
+        grid.add(similarityThreshold);
+        grid.add(similarityMutualKnnOnly);
+        grid.add(new JLabel(""));
+        grid.add(new JLabel("Max edges"));
+        grid.add(similarityMaxEdges);
+        return grid;
     }
 
     private void refreshLists() {
@@ -168,6 +213,14 @@ final class PrismMmpGraphPanel extends JPanel {
     }
 
     private void mineGraph() {
+        if (selectedMiningMode() == GraphMiningMode.SIMILARITY) {
+            mineSimilarityGraph();
+        } else {
+            mineMmpGraph();
+        }
+    }
+
+    private void mineMmpGraph() {
         RowSetItem rowSet = (RowSetItem) rowSetSelector.getSelectedItem();
         ColumnItem structure = (ColumnItem) structureColumnSelector.getSelectedItem();
         ColumnItem value = (ColumnItem) valueColumnSelector.getSelectedItem();
@@ -205,6 +258,47 @@ final class PrismMmpGraphPanel extends JPanel {
                     status.setText("Mined " + result.pairCount() + " MMP edges.");
                 } catch (Exception exception) {
                     showError("MMP mining failed", exception);
+                }
+            }
+        }.execute();
+    }
+
+    private void mineSimilarityGraph() {
+        RowSetItem rowSet = (RowSetItem) rowSetSelector.getSelectedItem();
+        ColumnItem structure = (ColumnItem) structureColumnSelector.getSelectedItem();
+        if (rowSet == null || structure == null || structure.column() == null) {
+            status.setText("Choose rows and a structure column.");
+            return;
+        }
+        status.setText("Mining similarity network...");
+        new SwingWorker<PrismSimilarityGraphSummary, Void>() {
+            @Override
+            protected PrismSimilarityGraphSummary doInBackground() {
+                return bridge.mineSimilarityGraph(new MinePrismSimilarityGraphRequest(
+                        sessionId,
+                        rowSet.rowSet().rowSetId(),
+                        structure.column().columnId(),
+                        blankToNull(graphId.getText()),
+                        blankToNull(label.getText()),
+                        "skelspheres",
+                        selectedSimilarityMode().wireValue(),
+                        intOrNull(similarityNeighborCount.getText()),
+                        doubleOrNull(similarityThreshold.getText()),
+                        similarityMutualKnnOnly.isSelected(),
+                        intOrNull(similarityMaxEdges.getText())
+                ));
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    PrismSimilarityGraphSummary result = get();
+                    refreshGraphs();
+                    selectGraph(result.graph().graphId());
+                    refreshWorkspace.run();
+                    status.setText("Mined " + result.edgeCount() + " similarity edges; skipped " + result.skippedRowCount() + " rows.");
+                } catch (Exception exception) {
+                    showError("Similarity mining failed", exception);
                 }
             }
         }.execute();
@@ -251,6 +345,51 @@ final class PrismMmpGraphPanel extends JPanel {
             status.setText("Created row set " + rowSet.rowSetId() + " with " + rowSet.rowCount() + " rows.");
         } catch (RuntimeException exception) {
             showError("Could not create graph neighborhood row set", exception);
+        }
+    }
+
+    private void openProjectRiver() {
+        GraphItem graph = graphs.getSelectedValue();
+        RowSetItem rowSet = (RowSetItem) rowSetSelector.getSelectedItem();
+        ColumnItem structure = (ColumnItem) structureColumnSelector.getSelectedItem();
+        if (graph == null || rowSet == null || structure == null || structure.column() == null) {
+            status.setText("Select a graph, row set, and structure column.");
+            return;
+        }
+        try {
+            String viewId = projectRiverViewId(graph.graph().graphId(), rowSet.rowSet().rowSetId());
+            ColumnItem value = (ColumnItem) valueColumnSelector.getSelectedItem();
+            List<String> labelColumns = value == null || value.column() == null
+                    ? List.of()
+                    : List.of(value.column().columnId());
+            ChemFlowProjectRiverViewSpec spec = new ChemFlowProjectRiverViewSpec(
+                    viewId,
+                    graph.graph().title() + " project river",
+                    graph.graph().graphId(),
+                    rowSet.rowSet().rowSetId(),
+                    structure.column().columnId(),
+                    null,
+                    labelColumns
+            );
+            PrismViewRecord record = new PrismViewRecord(
+                    spec.viewId(),
+                    spec.viewType(),
+                    spec.title(),
+                    spec,
+                    Instant.now(),
+                    Map.of("source", "mmp_graph_panel", "graphId", graph.graph().graphId(), "rowSetId", rowSet.rowSet().rowSetId())
+            );
+            boolean exists = workspaceModel.session().views().stream().anyMatch(view -> view.id().equals(viewId));
+            if (exists) {
+                workspaceModel.session().updateView(record);
+            } else {
+                workspaceModel.session().addView(record);
+            }
+            refreshWorkspace.run();
+            focusView.accept(viewId);
+            status.setText("Opened project river for " + rowSet.rowSet().name() + ".");
+        } catch (RuntimeException exception) {
+            showError("Could not open project river", exception);
         }
     }
 
@@ -319,19 +458,28 @@ final class PrismMmpGraphPanel extends JPanel {
         return "graph-neighborhood:" + safeId(graphId) + ":" + safeId(rowId);
     }
 
+    private static String projectRiverViewId(String graphId, String rowSetId) {
+        return "project-river:" + safeId(graphId) + ":" + safeId(rowSetId);
+    }
+
     private static String safeId(String value) {
         String safe = String.valueOf(value).trim().replaceAll("[^A-Za-z0-9_.:-]+", "_");
         return safe.isBlank() ? "item" : safe;
     }
 
     private static String formatGraph(PrismGraphSummary graph) {
-        return graph.title() + "\n"
-                + "ID: " + graph.graphId() + "\n"
-                + "Type: " + graph.graphType() + "\n"
-                + "Rows: " + graph.nodeCount() + "\n"
-                + "Edges: " + graph.edgeCount() + "\n"
-                + "Source row set: " + graph.sourceRowSetId() + "\n\n"
-                + graph.metadata();
+        StringBuilder builder = new StringBuilder();
+        builder.append(graph.title()).append('\n')
+                .append("ID: ").append(graph.graphId()).append('\n')
+                .append("Type: ").append(graph.graphType()).append('\n')
+                .append("Rows: ").append(graph.nodeCount()).append('\n')
+                .append("Edges: ").append(graph.edgeCount()).append('\n')
+                .append("Source row set: ").append(graph.sourceRowSetId()).append("\n\n");
+        Object similarity = graph.metadata().get("similarity");
+        if (similarity != null) {
+            builder.append("Similarity: ").append(similarity).append("\n\n");
+        }
+        return builder.append(graph.metadata()).toString();
     }
 
     private static String formatNeighborhood(PrismGraphNeighborhood neighborhood) {
@@ -374,6 +522,53 @@ final class PrismMmpGraphPanel extends JPanel {
     private static Double doubleOrNull(String value) {
         String text = blankToNull(value);
         return text == null ? null : Double.valueOf(text);
+    }
+
+    private GraphMiningMode selectedMiningMode() {
+        Object selected = miningMode.getSelectedItem();
+        return selected instanceof GraphMiningMode mode ? mode : GraphMiningMode.MMP;
+    }
+
+    private SimilarityMode selectedSimilarityMode() {
+        Object selected = similarityMode.getSelectedItem();
+        return selected instanceof SimilarityMode mode ? mode : SimilarityMode.HYBRID;
+    }
+
+    private enum GraphMiningMode {
+        MMP("MMP"),
+        SIMILARITY("Similarity");
+
+        private final String label;
+
+        GraphMiningMode(String label) {
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private enum SimilarityMode {
+        HYBRID("hybrid"),
+        KNN("knn"),
+        THRESHOLD("threshold");
+
+        private final String wireValue;
+
+        SimilarityMode(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        private String wireValue() {
+            return wireValue;
+        }
+
+        @Override
+        public String toString() {
+            return wireValue;
+        }
     }
 
     private record RowSetItem(PrismRowSetSummary rowSet) {
