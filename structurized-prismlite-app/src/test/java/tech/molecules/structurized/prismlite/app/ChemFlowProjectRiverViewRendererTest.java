@@ -7,7 +7,9 @@ import tech.molecules.chemflow.model.ChemFlowDocument;
 import tech.molecules.chemflow.model.ConnectorElement;
 import tech.molecules.chemflow.model.ProjectNodeElement;
 import tech.molecules.chemflow.model.Size2D;
+import tech.molecules.structurized.prism.engine.MaterializedColumnData;
 import tech.molecules.structurized.prism.engine.PrismColumn;
+import tech.molecules.structurized.prism.engine.PrismColumnSchema;
 import tech.molecules.structurized.prism.engine.PrismColumnType;
 import tech.molecules.structurized.prism.engine.PrismRowGraph;
 import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
@@ -124,6 +126,65 @@ class ChemFlowProjectRiverViewRendererTest {
         assertEquals(first, second);
     }
 
+    @Test
+    void defaultsProjectRiverColorModeToRootLineage() throws Exception {
+        Fixture fixture = fixture(List.of());
+        ChemFlowProjectRiverViewSpec base = spec(fixture);
+        ChemFlowProjectRiverViewSpec withColumnColor = colorSpec(fixture, ProjectRiverNodeColorMode.CATEGORICAL_COLUMN, "__river_series");
+
+        assertEquals(ProjectRiverNodeColorMode.ROOT_LINEAGE, base.nodeColorMode());
+        assertEquals(null, base.colorColumnId());
+        assertTrue(withColumnColor.referencedColumnIds().contains("__river_series"));
+    }
+
+    @Test
+    void colorsProjectRiverNodesByGraphComponent() throws Exception {
+        Fixture fixture = fixture(List.of(
+                new EdgeSpec("edge-1", 0, 1, 0.9),
+                new EdgeSpec("edge-2", 2, 2, 1.0)
+        ));
+        ChemFlowDocument document = document(render(fixture.session(), colorSpec(fixture, ProjectRiverNodeColorMode.GRAPH_COMPONENT, null)));
+
+        ProjectNodeElement first = node(document, fixture.rowA());
+        ProjectNodeElement second = node(document, fixture.rowB());
+        ProjectNodeElement isolated = node(document, fixture.rowC());
+
+        assertEquals(first.fillColor(), second.fillColor());
+        assertTrue(!first.fillColor().equals(isolated.fillColor()));
+    }
+
+    @Test
+    void colorsProjectRiverNodesByNumericColumn() throws Exception {
+        Fixture fixture = fixture(List.of(
+                new EdgeSpec("edge-1", 0, 1, 0.9),
+                new EdgeSpec("edge-2", 1, 2, 0.9)
+        ));
+        ChemFlowDocument document = document(render(fixture.session(), colorSpec(fixture, ProjectRiverNodeColorMode.NUMERIC_COLUMN, "__river_score")));
+
+        ProjectNodeElement low = node(document, fixture.rowA());
+        ProjectNodeElement high = node(document, fixture.rowB());
+        ProjectNodeElement missing = node(document, fixture.rowC());
+
+        assertTrue(!low.fillColor().equals(high.fillColor()));
+        assertEquals("#e5e7eb", missing.fillColor());
+    }
+
+    @Test
+    void colorsProjectRiverNodesByCategoricalColumn() throws Exception {
+        Fixture fixture = fixture(List.of(
+                new EdgeSpec("edge-1", 0, 1, 0.9),
+                new EdgeSpec("edge-2", 1, 2, 0.9)
+        ));
+        ChemFlowDocument document = document(render(fixture.session(), colorSpec(fixture, ProjectRiverNodeColorMode.CATEGORICAL_COLUMN, "__river_series")));
+
+        ProjectNodeElement hotA = node(document, fixture.rowA());
+        ProjectNodeElement hotB = node(document, fixture.rowB());
+        ProjectNodeElement cold = node(document, fixture.rowC());
+
+        assertEquals(hotA.fillColor(), hotB.fillColor());
+        assertTrue(!hotA.fillColor().equals(cold.fillColor()));
+    }
+
     private static ChemFlowProjectRiverViewSpec spec(Fixture fixture) {
         return new ChemFlowProjectRiverViewSpec(
                 "river",
@@ -157,6 +218,25 @@ class ChemFlowProjectRiverViewRendererTest {
         );
     }
 
+    private static ChemFlowProjectRiverViewSpec colorSpec(Fixture fixture, ProjectRiverNodeColorMode colorMode, String colorColumnId) {
+        return new ChemFlowProjectRiverViewSpec(
+                "river",
+                "Project River",
+                fixture.graph().id(),
+                fixture.rowSet().id(),
+                fixture.structure().id(),
+                null,
+                List.of(),
+                0.0,
+                150.0,
+                48.0,
+                25,
+                1.0,
+                colorMode,
+                colorColumnId
+        );
+    }
+
     private static JComponent render(PrismSession session, ChemFlowProjectRiverViewSpec spec) {
         PrismViewRecord view = PrismViewRecord.of(spec);
         PrismLiteWorkspaceModel model = new PrismLiteWorkspaceModel(session);
@@ -166,6 +246,7 @@ class ChemFlowProjectRiverViewRendererTest {
 
     private static Fixture fixture(List<EdgeSpec> edgeSpecs) throws Exception {
         PrismSession session = PrismSession.open(examplePath());
+        addColorTestColumns(session);
         PrismColumn structure = session.table().columns().stream()
                 .filter(column -> column.type() == PrismColumnType.MOLECULE)
                 .findFirst()
@@ -204,6 +285,31 @@ class ChemFlowProjectRiverViewRendererTest {
         session.addRowSet(rowSet);
         session.addGraph(graph);
         return new Fixture(session, structure, rowSet, graph, rowA, rowB, rowC);
+    }
+
+    private static void addColorTestColumns(PrismSession session) {
+        List<Double> scores = new java.util.ArrayList<>();
+        List<String> series = new java.util.ArrayList<>();
+        for (int row = 0; row < session.totalRowCount(); row++) {
+            if (row == 0) {
+                scores.add(1.0);
+            } else if (row == 1) {
+                scores.add(9.0);
+            } else {
+                scores.add(null);
+            }
+            series.add(row == 0 || row == 1 ? "hot" : row == 2 ? "cold" : null);
+        }
+        session.addMaterializedColumn(new MaterializedColumnData(
+                new PrismColumnSchema("__river_score", PrismColumnType.NUMERIC, "Score", null, null, null, null, null, null, Map.of()),
+                scores,
+                Map.of("source", "test")
+        ), true);
+        session.addMaterializedColumn(new MaterializedColumnData(
+                new PrismColumnSchema("__river_series", PrismColumnType.CATEGORICAL, "Series", null, null, null, null, null, null, Map.of()),
+                series,
+                Map.of("source", "test")
+        ), true);
     }
 
     private static boolean containsChemFlowCanvas(Component component) {
