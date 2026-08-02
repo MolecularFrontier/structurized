@@ -26,6 +26,10 @@ import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prism.engine.TextPatternFilter;
+import tech.molecules.structurized.prism.engine.live.PrismLiveBinding;
+import tech.molecules.structurized.prism.engine.live.PrismLiveEvaluation;
+import tech.molecules.structurized.prism.engine.live.PrismLiveExecutionMode;
+import tech.molecules.structurized.prism.engine.live.PrismLiveSuccessfulResult;
 import tech.molecules.structurized.prism.engine.TextPatternMode;
 import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
@@ -46,6 +50,7 @@ import tech.molecules.structurized.prism.result.OptionalNumericState;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -270,6 +275,88 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             }
         });
         return getMoleculeList(session.sessionId(), listId);
+    }
+
+    @Override
+    public synchronized List<PrismLiveEvaluatorSummary> listLiveEvaluators(String sessionId) {
+        ManagedPrismSession session = session(sessionId);
+        return session.liveContext().bindings().stream()
+                .map(binding -> liveEvaluatorSummary(session, binding))
+                .toList();
+    }
+
+    @Override
+    public synchronized PrismLiveEvaluatorSummary configureLiveEvaluator(
+            ConfigurePrismLiveEvaluatorRequest request
+    ) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String bindingId = normalizeId(request.bindingId(), "bindingId");
+        PrismLiveBinding previous = session.liveContext().findBinding(bindingId).orElse(null);
+        String capabilityId = request.capabilityId() == null || request.capabilityId().isBlank()
+                ? previous == null ? null : previous.capabilityId()
+                : normalizeId(request.capabilityId(), "capabilityId");
+        if (capabilityId == null) {
+            throw new ChemOperationException(
+                    "invalid_prism_live_evaluator",
+                    "capabilityId is required when creating a live evaluator binding."
+            );
+        }
+        PrismLiveExecutionMode mode = request.mode() == null || request.mode().isBlank()
+                ? previous == null ? PrismLiveExecutionMode.MANUAL : previous.mode()
+                : liveMode(request.mode());
+        long quietPeriodMillis = request.quietPeriodMillis() == null
+                ? previous == null ? 0L : previous.quietPeriod().toMillis()
+                : request.quietPeriodMillis();
+        if (quietPeriodMillis < 0) {
+            throw new ChemOperationException("invalid_prism_live_evaluator", "quietPeriodMillis must not be negative.");
+        }
+        Map<String, Object> configuration = request.configuration() == null
+                ? previous == null ? Map.of() : previous.configuration()
+                : request.configuration();
+        PrismLiveBinding next = new PrismLiveBinding(
+                bindingId, capabilityId, mode, Duration.ofMillis(quietPeriodMillis), configuration);
+        try {
+            session.runAs(
+                    ManagedPrismSessionChangeOrigin.MCP,
+                    request.expectedWorkspaceRevision(),
+                    () -> session.liveContext().configureBinding(next)
+            );
+            return liveEvaluatorSummary(session, next);
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            throw new ChemOperationException("invalid_prism_live_evaluator", exception.getMessage(), exception);
+        }
+    }
+
+    @Override
+    public synchronized List<PrismLiveEvaluationView> listLiveEvaluations(
+            String sessionId,
+            String documentId
+    ) {
+        ManagedPrismSession session = session(sessionId);
+        String normalizedDocumentId = normalizeId(documentId, "documentId");
+        requireMoleculeDocument(session, normalizedDocumentId);
+        return session.liveContext().evaluationsFor(normalizedDocumentId).stream()
+                .map(evaluation -> liveEvaluationView(session, evaluation))
+                .toList();
+    }
+
+    @Override
+    public synchronized PrismLiveEvaluationView runLiveEvaluator(RunPrismLiveEvaluatorRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        try {
+            PrismLiveEvaluation evaluation = session.callAs(
+                    ManagedPrismSessionChangeOrigin.MCP,
+                    () -> session.liveContext().runNow(
+                            normalizeId(request.bindingId(), "bindingId"),
+                            normalizeId(request.documentId(), "documentId"),
+                            request.expectedDocumentRevision())
+            );
+            return liveEvaluationView(session, evaluation);
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            throw new ChemOperationException("invalid_prism_live_evaluation", exception.getMessage(), exception);
+        }
     }
 
     @Override
@@ -1640,6 +1727,71 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 moleculeCodec.interchange(document),
                 document.revision()
         );
+    }
+
+    private PrismLiveEvaluatorSummary liveEvaluatorSummary(
+            ManagedPrismSession session,
+            PrismLiveBinding binding
+    ) {
+        var capability = session.liveContext().findCapability(binding.capabilityId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Live capability " + binding.capabilityId() + " is not registered."));
+        return new PrismLiveEvaluatorSummary(
+                session.sessionId(), session.revision(), binding.id(), capability.id(),
+                capability.displayName(), capability.description(),
+                binding.mode().name().toLowerCase(Locale.ROOT),
+                binding.quietPeriod().toMillis(), binding.configuration()
+        );
+    }
+
+    private PrismLiveEvaluationView liveEvaluationView(
+            ManagedPrismSession session,
+            PrismLiveEvaluation evaluation
+    ) {
+        PrismLiveBinding binding = session.liveContext().findBinding(evaluation.bindingId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Live binding " + evaluation.bindingId() + " is not registered."));
+        PrismLiveSuccessfulResult successful = evaluation.lastSuccessful();
+        return new PrismLiveEvaluationView(
+                session.sessionId(),
+                session.liveContext().sequence(),
+                evaluation.bindingId(),
+                binding.capabilityId(),
+                evaluation.resourceId(),
+                evaluation.targetRevision(),
+                evaluation.status().name().toLowerCase(Locale.ROOT),
+                evaluation.updatedAt().toString(),
+                successful == null ? null : successful.inputRevision(),
+                successful == null ? null : successful.completedAt().toString(),
+                evaluation.showingStaleResult(),
+                successful == null ? null : successful.result().schemaId(),
+                successful == null ? Map.of() : successful.result().values(),
+                successful == null ? List.of() : successful.result().warnings(),
+                successful == null ? Map.of() : successful.result().metadata(),
+                evaluation.error()
+        );
+    }
+
+    private static PrismLiveExecutionMode liveMode(String value) {
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "auto" -> PrismLiveExecutionMode.AUTO;
+            case "manual" -> PrismLiveExecutionMode.MANUAL;
+            case "disabled" -> PrismLiveExecutionMode.DISABLED;
+            default -> throw new ChemOperationException(
+                    "invalid_prism_live_evaluator", "mode must be auto, manual, or disabled.");
+        };
+    }
+
+    private static PrismMoleculeDocument requireMoleculeDocument(
+            ManagedPrismSession session,
+            String documentId
+    ) {
+        return session.moleculeWorkspace().findDocument(documentId)
+                .orElseThrow(() -> new ChemOperationException(
+                        "prism_molecule_document_not_found",
+                        "Molecule document " + documentId + " does not exist in Prism session "
+                                + session.sessionId() + "."
+                ));
     }
 
     private static PrismMoleculeDocumentMode moleculeMode(String value) {

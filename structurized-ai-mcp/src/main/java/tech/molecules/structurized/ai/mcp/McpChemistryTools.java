@@ -1,5 +1,6 @@
 package tech.molecules.structurized.ai.mcp;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -27,6 +28,7 @@ import tech.molecules.structurized.ai.model.StructureRef;
 import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
 import tech.molecules.structurized.ai.prism.ClusterPrismRowSetRequest;
 import tech.molecules.structurized.ai.prism.AddPrismMoleculesRequest;
+import tech.molecules.structurized.ai.prism.ConfigurePrismLiveEvaluatorRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismMoleculeListRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismClusterRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismGraphNeighborhoodRowSetRequest;
@@ -43,6 +45,7 @@ import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismPackRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
+import tech.molecules.structurized.ai.prism.RunPrismLiveEvaluatorRequest;
 import tech.molecules.structurized.ai.prism.PrismGroupingColumnSummary;
 import tech.molecules.structurized.ai.prism.PrismRowSetColumnSummary;
 import tech.molecules.structurized.ai.prism.PrismGroupingSummary;
@@ -372,6 +375,45 @@ final class McpChemistryTools {
                         requiredString(args, "session_id"),
                         requiredString(args, "list_id"),
                         moleculeInputs(args))));
+        add(result, "list_prism_live_evaluators", "Lists live evaluator bindings and their execution configuration for one Prism session.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listLiveEvaluators(requiredString(args, "session_id")));
+        add(result, "configure_prism_live_evaluator", "Creates or updates a live evaluator binding. Binding changes are guarded workspace mutations.", schema(
+                required("session_id", "binding_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("binding_id", "string", "Evaluator binding ID."),
+                prop("capability_id", "string", "Capability ID; required only for a new binding."),
+                prop("mode", "string", "auto, manual, or disabled."),
+                prop("quiet_period_ms", "integer", "Debounce quiet period in milliseconds."),
+                prop("configuration", "object", "Provider-specific evaluator configuration."),
+                prop("expected_workspace_revision", "integer", "Optional optimistic workspace revision guard.")),
+                args -> prism.configureLiveEvaluator(new ConfigurePrismLiveEvaluatorRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "binding_id"),
+                        optionalString(args, "capability_id", null),
+                        optionalString(args, "mode", null),
+                        optionalLong(args, "quiet_period_ms"),
+                        optionalObjectMap(args, "configuration"),
+                        optionalLong(args, "expected_workspace_revision"))));
+        add(result, "list_prism_live_evaluations", "Returns current live evaluator states and latest successful results for one molecule document.", schema(
+                required("session_id", "document_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("document_id", "string", "Molecule document ID.")),
+                args -> prism.listLiveEvaluations(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "document_id")));
+        add(result, "run_prism_live_evaluator", "Queues one evaluator immediately for a molecule document without changing semantic workspace revision.", schema(
+                required("session_id", "binding_id", "document_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("binding_id", "string", "Evaluator binding ID."),
+                prop("document_id", "string", "Molecule document ID."),
+                prop("expected_document_revision", "integer", "Optional optimistic molecule-document revision guard.")),
+                args -> prism.runLiveEvaluator(new RunPrismLiveEvaluatorRequest(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "binding_id"),
+                        requiredString(args, "document_id"),
+                        optionalLong(args, "expected_document_revision"))));
         add(result, "list_prism_row_sets", "Lists Prism row sets for a managed session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
@@ -2404,6 +2446,29 @@ final class McpChemistryTools {
             throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be an integer.");
         }
         return node.asInt();
+    }
+
+    private static Long optionalLong(ObjectNode args, String name) {
+        JsonNode node = args.get(name);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.canConvertToLong()) {
+            throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be an integer.");
+        }
+        return node.asLong();
+    }
+
+    private Map<String, Object> optionalObjectMap(ObjectNode args, String name) {
+        JsonNode node = args.get(name);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.isObject()) {
+            throw new ChemOperationException("invalid_arguments", "Argument " + name + " must be an object.");
+        }
+        return mapper.convertValue(node, new TypeReference<Map<String, Object>>() {
+        });
     }
 
     private static boolean optionalBoolean(ObjectNode args, String name, boolean defaultValue) {

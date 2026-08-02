@@ -1,15 +1,20 @@
 package tech.molecules.structurized.ai.prism;
 
-import tech.molecules.structurized.prism.engine.PrismSession;
-import tech.molecules.structurized.prism.engine.PrismSessionChange;
 import tech.molecules.structurized.prism.engine.PrismMoleculeWorkspace;
+import tech.molecules.structurized.prism.engine.PrismSession;
+import tech.molecules.structurized.prism.engine.PrismWorkspace;
+import tech.molecules.structurized.prism.engine.PrismWorkspaceChange;
+import tech.molecules.structurized.prism.engine.PrismWorkspaceChangeOrigin;
+import tech.molecules.structurized.prism.engine.PrismWorkspaceChangeType;
+import tech.molecules.structurized.prism.engine.PrismWorkspaceExecutor;
+import tech.molecules.structurized.prism.engine.live.PrismLiveContext;
+import tech.molecules.structurized.prism.engine.ocl.OclLiveEvaluationSupport;
 import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
 
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -18,13 +23,8 @@ public final class ManagedPrismSession {
     private final String label;
     private final Path sourcePath;
     private final InMemoryPrismDataset dataContext;
-    private final PrismSession workspace;
-    private final PrismMoleculeWorkspace moleculeWorkspace;
+    private final PrismWorkspace prismWorkspace;
     private final Instant openedAt;
-    private final ManagedPrismSessionExecutor executor;
-    private volatile long revision;
-    private final CopyOnWriteArrayList<Consumer<ManagedPrismSessionChange>> listeners = new CopyOnWriteArrayList<>();
-    private final ThreadLocal<MutationScope> mutationScope = new ThreadLocal<>();
 
     public ManagedPrismSession(String sessionId,
                                String label,
@@ -46,13 +46,17 @@ public final class ManagedPrismSession {
         this.label = label == null || label.isBlank() ? this.sessionId : label.trim();
         this.sourcePath = Objects.requireNonNull(sourcePath, "sourcePath");
         this.dataContext = dataContext;
-        this.workspace = Objects.requireNonNull(workspace, "workspace");
-        this.moleculeWorkspace = new PrismMoleculeWorkspace();
         this.openedAt = openedAt == null ? Instant.now() : openedAt;
-        this.executor = Objects.requireNonNull(executor, "executor");
-        this.revision = 1L;
-        this.workspace.subscribe(this::workspaceChanged);
-        this.moleculeWorkspace.subscribe(change -> recordChange(ManagedPrismSessionChangeType.MOLECULES));
+        ManagedPrismSessionExecutor managedExecutor = Objects.requireNonNull(executor, "executor");
+        PrismWorkspaceExecutor workspaceExecutor = new PrismWorkspaceExecutor() {
+            @Override
+            public <T> T execute(Supplier<T> action) {
+                return managedExecutor.execute(action);
+            }
+        };
+        this.prismWorkspace = new PrismWorkspace(
+                this.sessionId, Objects.requireNonNull(workspace, "workspace"), new PrismMoleculeWorkspace(),
+                workspaceExecutor, ManagedPrismLiveRuntime.environment(), OclLiveEvaluationSupport::registerDefaults);
     }
 
     public String sessionId() {
@@ -82,26 +86,33 @@ public final class ManagedPrismSession {
     }
 
     public PrismSession workspace() {
-        return workspace;
+        return prismWorkspace.session();
     }
 
     public PrismMoleculeWorkspace moleculeWorkspace() {
-        return moleculeWorkspace;
+        return prismWorkspace.molecules();
     }
 
+    public PrismWorkspace prismWorkspace() {
+        return prismWorkspace;
+    }
+
+    public PrismLiveContext liveContext() {
+        return prismWorkspace.liveContext();
+    }
 
     public Instant openedAt() {
         return openedAt;
     }
 
     public long revision() {
-        return revision;
+        return prismWorkspace.revision();
     }
 
     public ManagedPrismSessionSubscription subscribe(Consumer<ManagedPrismSessionChange> listener) {
         Consumer<ManagedPrismSessionChange> registered = Objects.requireNonNull(listener, "listener");
-        listeners.add(registered);
-        return () -> listeners.remove(registered);
+        var subscription = prismWorkspace.subscribe(change -> registered.accept(managedChange(change)));
+        return subscription::close;
     }
 
     public void runAs(ManagedPrismSessionChangeOrigin origin, Runnable action) {
@@ -111,65 +122,47 @@ public final class ManagedPrismSession {
         });
     }
 
+    public void runAs(ManagedPrismSessionChangeOrigin origin, Long expectedRevision, Runnable action) {
+        prismWorkspace.runAs(workspaceOrigin(origin), expectedRevision, action);
+    }
+
     public <T> T callAs(ManagedPrismSessionChangeOrigin origin, Supplier<T> action) {
-        Objects.requireNonNull(origin, "origin");
-        Objects.requireNonNull(action, "action");
-        return executor.execute(() -> callDirect(origin, action));
+        return prismWorkspace.callAs(workspaceOrigin(origin), action);
     }
 
-    private <T> T callDirect(ManagedPrismSessionChangeOrigin origin, Supplier<T> action) {
-        MutationScope previous = mutationScope.get();
-        if (previous != null) {
-            return action.get();
-        }
-        MutationScope scope = new MutationScope();
-        mutationScope.set(scope);
-        try {
-            T result = action.get();
-            if (scope.type != null) {
-                publish(scope.type, origin);
-            }
-            return result;
-        } finally {
-            if (previous == null) mutationScope.remove();
-            else mutationScope.set(previous);
-        }
+    public <T> T callAs(ManagedPrismSessionChangeOrigin origin, Long expectedRevision, Supplier<T> action) {
+        return prismWorkspace.callAs(workspaceOrigin(origin), expectedRevision, action);
     }
 
+    private ManagedPrismSessionChange managedChange(PrismWorkspaceChange change) {
+        return new ManagedPrismSessionChange(this, change.revision(), managedType(change.type()), managedOrigin(change.origin()));
+    }
 
-    private void workspaceChanged(PrismSessionChange change) {
-        ManagedPrismSessionChangeType type = switch (change.type()) {
+    private static ManagedPrismSessionChangeType managedType(PrismWorkspaceChangeType type) {
+        return switch (type) {
             case PROJECTION -> ManagedPrismSessionChangeType.PROJECTION;
             case STRUCTURE -> ManagedPrismSessionChangeType.STRUCTURE;
             case VIEWS -> ManagedPrismSessionChangeType.VIEWS;
+            case MOLECULES -> ManagedPrismSessionChangeType.MOLECULES;
+            case LIVE_CONFIGURATION -> ManagedPrismSessionChangeType.LIVE_CONFIGURATION;
         };
-        recordChange(type);
     }
 
-    private void recordChange(ManagedPrismSessionChangeType type) {
-        MutationScope scope = mutationScope.get();
-        if (scope != null) {
-            scope.type = ManagedPrismSessionChangeType.merge(scope.type, type);
-            return;
-        }
-        publish(type, ManagedPrismSessionChangeOrigin.LOCAL_UI);
+    private static PrismWorkspaceChangeOrigin workspaceOrigin(ManagedPrismSessionChangeOrigin origin) {
+        Objects.requireNonNull(origin, "origin");
+        return switch (origin) {
+            case LOCAL_UI -> PrismWorkspaceChangeOrigin.LOCAL_UI;
+            case MCP -> PrismWorkspaceChangeOrigin.AGENT;
+            case SYSTEM -> PrismWorkspaceChangeOrigin.SYSTEM;
+        };
     }
 
-    private synchronized long publish(ManagedPrismSessionChangeType type, ManagedPrismSessionChangeOrigin origin) {
-        long nextRevision = ++revision;
-        ManagedPrismSessionChange change = new ManagedPrismSessionChange(this, nextRevision, type, origin);
-        for (Consumer<ManagedPrismSessionChange> listener : listeners) {
-            try {
-                listener.accept(change);
-            } catch (RuntimeException ignored) {
-                // Session observers cannot roll back an already committed workspace change.
-            }
-        }
-        return nextRevision;
-    }
-
-    private static final class MutationScope {
-        private ManagedPrismSessionChangeType type;
+    private static ManagedPrismSessionChangeOrigin managedOrigin(PrismWorkspaceChangeOrigin origin) {
+        return switch (origin) {
+            case LOCAL_UI -> ManagedPrismSessionChangeOrigin.LOCAL_UI;
+            case AGENT -> ManagedPrismSessionChangeOrigin.MCP;
+            case BACKGROUND, SYSTEM -> ManagedPrismSessionChangeOrigin.SYSTEM;
+        };
     }
 
     private static String requireText(String value, String name) {

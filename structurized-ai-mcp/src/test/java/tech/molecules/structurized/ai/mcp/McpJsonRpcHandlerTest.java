@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(95, tools.size());
+        assertEquals(99, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -73,6 +73,10 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_prism_molecule_list"));
         assertTrue(hasTool(tools, "create_prism_molecule_list"));
         assertTrue(hasTool(tools, "add_prism_molecules"));
+        assertTrue(hasTool(tools, "list_prism_live_evaluators"));
+        assertTrue(hasTool(tools, "configure_prism_live_evaluator"));
+        assertTrue(hasTool(tools, "list_prism_live_evaluations"));
+        assertTrue(hasTool(tools, "run_prism_live_evaluator"));
         assertTrue(hasTool(tools, "list_prism_row_sets"));
         assertTrue(hasTool(tools, "get_prism_row_set_members"));
         assertTrue(hasTool(tools, "create_prism_row_set_from_subject_set"));
@@ -218,6 +222,65 @@ class McpJsonRpcHandlerTest {
                 """));
         assertEquals(2, listed.at("/result/structuredContent").size());
         assertEquals("ideas", listed.at("/result/structuredContent/1/listId").asText());
+    }
+
+    @Test
+    void agentCanConfigureAndRunPrismLiveEvaluators() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String path = prismDataset().toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"live\"}"));
+        JsonNode added = call(handler, request(2, "add_prism_molecules", """
+                {
+                  "session_id":"live",
+                  "list_id":"scratchpad",
+                  "molecules":[{"title":"Ethanol","structure":"CCO"}]
+                }
+                """));
+        String documentId = added.at("/result/structuredContent/documents/0/documentId").asText();
+
+        JsonNode evaluators = call(handler, request(3, "list_prism_live_evaluators", """
+                {"session_id":"live"}
+                """));
+        assertEquals(2, evaluators.at("/result/structuredContent").size());
+
+        JsonNode configured = call(handler, request(4, "configure_prism_live_evaluator", """
+                {
+                  "session_id":"live",
+                  "binding_id":"ocl.basic_properties",
+                  "mode":"manual",
+                  "quiet_period_ms":0
+                }
+                """));
+        assertEquals("manual", configured.at("/result/structuredContent/mode").asText());
+
+        JsonNode queued = call(handler, request(5, "run_prism_live_evaluator", """
+                {
+                  "session_id":"live",
+                  "binding_id":"ocl.basic_properties",
+                  "document_id":"%s",
+                  "expected_document_revision":1
+                }
+                """.formatted(documentId)));
+        assertEquals(documentId, queued.at("/result/structuredContent/documentId").asText(), queued.toPrettyString());
+
+        JsonNode evaluations = null;
+        JsonNode basicProperties = null;
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(3).toNanos();
+        do {
+            evaluations = call(handler, request(6, "list_prism_live_evaluations",
+                    "{\"session_id\":\"live\",\"document_id\":\"" + documentId + "\"}"));
+            for (JsonNode evaluation : evaluations.at("/result/structuredContent")) {
+                if ("ocl.basic_properties".equals(evaluation.path("bindingId").asText())) {
+                    basicProperties = evaluation;
+                    break;
+                }
+            }
+            if (basicProperties != null && "succeeded".equals(basicProperties.path("status").asText())) break;
+            Thread.sleep(10);
+        } while (System.nanoTime() < deadline);
+        assertEquals("chemistry.ocl.basic_properties.v1",
+                basicProperties == null ? "" : basicProperties.path("schemaId").asText(),
+                evaluations == null ? "no evaluation response" : evaluations.toPrettyString());
     }
 
     @Test

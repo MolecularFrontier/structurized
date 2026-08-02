@@ -4,7 +4,8 @@ public enum ManagedPrismSessionChangeType {
     PROJECTION,
     STRUCTURE,
     VIEWS,
-    MOLECULES;
+    MOLECULES,
+    LIVE_CONFIGURATION;
 
     static ManagedPrismSessionChangeType merge(ManagedPrismSessionChangeType left,
                                                 ManagedPrismSessionChangeType right) {

@@ -27,6 +27,14 @@ public interface PrismBridgeService {
 
     PrismMoleculeListView addMolecules(AddPrismMoleculesRequest request);
 
+    List<PrismLiveEvaluatorSummary> listLiveEvaluators(String sessionId);
+
+    PrismLiveEvaluatorSummary configureLiveEvaluator(ConfigurePrismLiveEvaluatorRequest request);
+
+    List<PrismLiveEvaluationView> listLiveEvaluations(String sessionId, String documentId);
+
+    PrismLiveEvaluationView runLiveEvaluator(RunPrismLiveEvaluatorRequest request);
+
     List<PrismRowSetSummary> listRowSets(String sessionId);
 
     List<PrismGroupingSummary> listGroupings(String sessionId);
