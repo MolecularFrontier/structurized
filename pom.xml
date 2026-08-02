@@ -6,7 +6,7 @@
 
     <groupId>tech.molecules</groupId>
     <artifactId>structurized</artifactId>
-    <version>0.2.9</version>
+    <version>0.3.1</version>
     <name>structurized</name>
     <description>Modular medicinal chemistry and cheminformatics analysis stack</description>
     <url>https://github.com/MolecularFrontier/structurized</url>
@@ -50,7 +50,7 @@
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
         <jackson.version>2.17.1</jackson.version>
         <openchemlib.version>2026.1.1</openchemlib.version>
-        <prism.version>0.5.4</prism.version>
+        <prism.version>0.6.1</prism.version>
         <xchart.version>3.8.8</xchart.version>
     </properties>
 
