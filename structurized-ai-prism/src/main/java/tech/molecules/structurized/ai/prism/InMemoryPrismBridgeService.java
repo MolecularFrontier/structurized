@@ -33,6 +33,7 @@ import tech.molecules.structurized.prism.engine.live.PrismLiveSuccessfulResult;
 import tech.molecules.structurized.prism.engine.TextPatternMode;
 import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
+import tech.molecules.structurized.prism.io.PrismTsvSnapshotLoader;
 import tech.molecules.structurized.prism.model.CategoryDefinition;
 import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
@@ -124,7 +125,9 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         try {
-            InMemoryPrismDataset dataset = PrismTsvDatasetLoader.load(sourcePath);
+            InMemoryPrismDataset dataset = PrismTsvSnapshotLoader.isSnapshot(sourcePath)
+                    ? PrismTsvSnapshotLoader.load(sourcePath).dataset()
+                    : PrismTsvDatasetLoader.load(sourcePath);
             PrismSession workspace = PrismSessionImporter.toSession(dataset, sourcePath);
             ensureAllRowSet(workspace);
             String label = request.label() == null || request.label().isBlank() ? sessionId : request.label().trim();

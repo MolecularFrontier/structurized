@@ -50,7 +50,7 @@
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
         <jackson.version>2.17.1</jackson.version>
         <openchemlib.version>2026.1.1</openchemlib.version>
-        <prism.version>0.6.1</prism.version>
+        <prism.version>0.6.2</prism.version>
         <xchart.version>3.8.8</xchart.version>
     </properties>
 
