@@ -10,7 +10,7 @@ Project coordinates:
 - AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.3.3`
 - AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.3.3`
 - Analytics module: `tech.molecules:structurized-analytics:0.3.3`
-- Workbench module: `tech.molecules:structurized-workbench:0.3.3`
+- Workbench module: `tech.molecules:structurized-workbench:0.3.4-SNAPSHOT`
 
 Build
 -----
@@ -28,7 +28,8 @@ Build
 - `java -jar structurized-prismlite-app/target/structurized-prismlite-app-0.3.3-standalone.jar [--session-id=workspace] [dataset]` – launch PrismLite and stdio MCP over one managed session
 - `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
-- The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.
+- The workbench includes MMP statistics browsing plus a `Recommendations` editor. Draw or paste a structure, select editable atoms with the lasso tool, choose endpoint directions, and apply persisted one-cut/two-cut transformations in a cancellable background search.
+- Recommendation selection modes are `Editable region`, `Exact fragment`, `Attachment vicinity`, and `All sites`. Selecting a proposal shows the persisted endpoint-valued example pairs as reconstructed full structures.
 
 Release
 -------
