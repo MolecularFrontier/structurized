@@ -1,6 +1,7 @@
 package tech.molecules.structurized.workbench.prism;
 
 import com.actelion.research.chem.Molecule;
+import com.actelion.research.chem.IDCodeParser;
 import com.actelion.research.chem.SmilesParser;
 import com.actelion.research.chem.StereoMolecule;
 import org.junit.jupiter.api.Test;
@@ -100,6 +101,35 @@ class MmpRecommendationPanelTest {
         assertTrue(thrown.get().getMessage().contains("Select editable atoms"));
     }
 
+    @Test
+    void remapsEditorSelectionToCanonicalIdcodeAtomIndices(@TempDir Path tempDir) throws Exception {
+        Path database = tempDir.resolve("selection-mapping.sqlite");
+        try (SqliteMmpAnalyticsRepository repository =
+                     SqliteMmpAnalyticsRepository.open(database)) {
+            repository.saveStatsRun(new MmpEndpointStatsRun(
+                    "primary", "endpoint", "set", "universe", "hash", "stats",
+                    Instant.parse("2026-08-06T10:00:00Z"), 0, 0, 0, 0, null), List.of());
+        }
+        StereoMolecule editorMolecule = parse("CCN(CC)CCO");
+        int editorOxygen = atomWithAtomicNumber(editorMolecule, 8);
+        AtomicReference<MmpRecommendationRequest> requestRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            MmpRecommendationPanel panel = new MmpRecommendationPanel();
+            panel.setDatabasePath(database);
+            panel.setInputMolecule(editorMolecule, Set.of(editorOxygen));
+            requestRef.set(panel.buildRequest());
+        });
+
+        MmpRecommendationRequest request = requestRef.get();
+        StereoMolecule canonicalMolecule = new StereoMolecule();
+        new IDCodeParser().parse(canonicalMolecule, request.inputIdcode());
+        int canonicalOxygen = atomWithAtomicNumber(canonicalMolecule, 8);
+
+        assertFalse(editorOxygen == canonicalOxygen,
+                "fixture must exercise canonical atom reordering");
+        assertEquals(Set.of(canonicalOxygen), request.selectedAtomIndices());
+    }
+
     private static MmpMiningConfig config() {
         return MmpMiningConfig.builder()
                 .maxCuts(2)
@@ -123,5 +153,12 @@ class MmpRecommendationPanelTest {
         } catch (Exception exception) {
             throw new IllegalStateException(exception);
         }
+    }
+
+    private static int atomWithAtomicNumber(StereoMolecule molecule, int atomicNumber) {
+        for (int atom = 0; atom < molecule.getAllAtoms(); atom++) {
+            if (molecule.getAtomicNo(atom) == atomicNumber) return atom;
+        }
+        throw new IllegalArgumentException("no atom with atomic number " + atomicNumber);
     }
 }

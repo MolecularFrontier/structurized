@@ -232,7 +232,8 @@ final class MmpRecommendationPanel extends JPanel {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Select exactly one primary endpoint."));
-        Set<Integer> selectedAtoms = selectedAtoms(molecule);
+        CanonicalEditorInput canonicalInput = canonicalEditorInput(molecule);
+        Set<Integer> selectedAtoms = canonicalInput.selectedAtomIndices();
         MmpSelectionMode mode = (MmpSelectionMode) selectionMode.getSelectedItem();
         if (mode == null) mode = MmpSelectionMode.EDITABLE_REGION;
         if (mode.requiresSelection() && selectedAtoms.isEmpty()) {
@@ -244,7 +245,7 @@ final class MmpRecommendationPanel extends JPanel {
                         choice.run().runId(), choice.direction()))
                 .toList();
         return new MmpRecommendationRequest(
-                new Canonizer(molecule).getIDCode(),
+                canonicalInput.idcode(),
                 selectedAtoms,
                 mode,
                 preferences,
@@ -363,6 +364,17 @@ final class MmpRecommendationPanel extends JPanel {
         return Set.copyOf(selected);
     }
 
+    private static CanonicalEditorInput canonicalEditorInput(StereoMolecule molecule) {
+        Canonizer canonizer = new Canonizer(molecule);
+        String idcode = canonizer.getIDCode();
+        int[] canonicalIndexByEditorAtom = canonizer.getGraphIndexes();
+        LinkedHashSet<Integer> canonicalSelection = new LinkedHashSet<>();
+        for (Integer editorAtom : selectedAtoms(molecule)) {
+            canonicalSelection.add(canonicalIndexByEditorAtom[editorAtom]);
+        }
+        return new CanonicalEditorInput(idcode, Set.copyOf(canonicalSelection));
+    }
+
     private static StereoMolecule parse(String idcode) {
         StereoMolecule molecule = new StereoMolecule();
         new IDCodeParser().parse(molecule, idcode);
@@ -410,6 +422,9 @@ final class MmpRecommendationPanel extends JPanel {
 
     int evidenceCount() {
         return evidencePanel.rowCount();
+    }
+
+    private record CanonicalEditorInput(String idcode, Set<Integer> selectedAtomIndices) {
     }
 
     private record EndpointChoice(
