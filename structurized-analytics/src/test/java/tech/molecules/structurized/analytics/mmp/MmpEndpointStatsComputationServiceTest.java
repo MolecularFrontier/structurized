@@ -5,7 +5,10 @@ import com.actelion.research.chem.SmilesParser;
 import com.actelion.research.chem.StereoMolecule;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tech.molecules.structurized.mmp.MmpFragmentationRecord;
 import tech.molecules.structurized.mmp.MmpMiningConfig;
+import tech.molecules.structurized.mmp.MmpPair;
+import tech.molecules.structurized.mmp.MmpTransformStats;
 import tech.molecules.structurized.prism.model.EndpointDataType;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.model.EndpointType;
@@ -17,6 +20,10 @@ import tech.molecules.structurized.prism.query.EndpointValueRecord;
 import tech.molecules.structurized.prism.result.NumericResult;
 
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +31,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MmpEndpointStatsComputationServiceTest {
@@ -31,6 +39,7 @@ class MmpEndpointStatsComputationServiceTest {
     @Test
     void computesUnionUniverseAndPersistsEndpointStats(@TempDir Path tempDir) throws Exception {
         InMemoryPrismDataset dataset = dataset();
+        Clock clock = Clock.fixed(Instant.parse("2026-08-06T10:15:30Z"), ZoneOffset.UTC);
         try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.open(tempDir.resolve("mmp.db"))) {
             MmpEndpointStatsComputationService service = new MmpEndpointStatsComputationService(
                     dataset.endpointProvider(),
@@ -38,18 +47,22 @@ class MmpEndpointStatsComputationServiceTest {
                     structureProvider(),
                     repository,
                     repository,
-                    repository
+                    repository,
+                    clock
             );
 
-            MmpEndpointStatsComputationResult result = service.computeAndPersist(
-                    MmpEndpointStatsConfig.builder()
-                            .putEndpointSubjectSetId("ic50", "assay:ic50:measured")
-                            .putEndpointSubjectSetId("logd", "assay:logd:measured")
-                            .batchSize(2)
-                            .build(),
-                    mmpConfig()
-            );
+            MmpEndpointStatsConfig config = MmpEndpointStatsConfig.builder()
+                    .putEndpointSubjectSetId("ic50", "assay:ic50:measured")
+                    .putEndpointSubjectSetId("logd", "assay:logd:measured")
+                    .batchSize(2)
+                    .build();
+            MmpMiningConfig miningConfig = mmpConfig();
+            MmpEndpointStatsComputationResult expected = new MmpEndpointStatsCalculator(clock)
+                    .compute(service.loadSnapshot(config), config, miningConfig)
+                    .summary();
+            MmpEndpointStatsComputationResult result = service.computeAndPersist(config, miningConfig);
 
+            assertEquals(expected, result);
             assertEquals(1, result.universes().size());
             assertEquals(2, result.statsRuns().size());
             assertEquals(3, result.structuralSubjectCount());
@@ -94,6 +107,44 @@ class MmpEndpointStatsComputationServiceTest {
             assertTrue(result.universes().stream()
                     .allMatch(universe -> repository.findUniverse(universe.universeId()).isPresent()));
         }
+    }
+
+    @Test
+    void doesNotWriteAnythingWhenCalculationFails() throws Exception {
+        InMemoryPrismDataset dataset = dataset();
+        CountingRepository repository = new CountingRepository();
+        Clock failingClock = new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                throw new IllegalStateException("synthetic calculation failure");
+            }
+        };
+        MmpEndpointStatsComputationService service = new MmpEndpointStatsComputationService(
+                dataset.endpointProvider(),
+                dataset.subjectSetProvider(),
+                structureProvider(),
+                repository,
+                repository,
+                repository,
+                failingClock
+        );
+        MmpEndpointStatsConfig config = MmpEndpointStatsConfig.builder()
+                .putEndpointSubjectSetId("ic50", "assay:ic50:measured")
+                .putEndpointSubjectSetId("logd", "assay:logd:measured")
+                .build();
+
+        assertThrows(IllegalStateException.class, () -> service.computeAndPersist(config, mmpConfig()));
+        assertEquals(0, repository.writeCount);
     }
 
     private static MmpMiningConfig mmpConfig() {
@@ -178,5 +229,65 @@ class MmpEndpointStatsComputationServiceTest {
         new SmilesParser().parse(molecule, smiles);
         molecule.ensureHelperArrays(Molecule.cHelperRings);
         return molecule;
+    }
+
+    private static final class CountingRepository
+            implements MmpUniverseRepository, MmpPairRepository, MmpEndpointStatsRepository {
+        private int writeCount;
+
+        @Override
+        public void saveUniverse(MmpUniverse universe, List<String> subjectIds) {
+            writeCount++;
+        }
+
+        @Override
+        public Optional<MmpUniverse> findUniverse(String universeId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<MmpUniverse> listUniverses() {
+            return List.of();
+        }
+
+        @Override
+        public List<String> listUniverseSubjects(String universeId) {
+            return List.of();
+        }
+
+        @Override
+        public void replaceFragmentationRecords(String universeId, List<MmpFragmentationRecord> records) {
+            writeCount++;
+        }
+
+        @Override
+        public void replacePairs(String universeId, List<MmpPair> pairs) {
+            writeCount++;
+        }
+
+        @Override
+        public List<MmpPair> listPairs(String universeId) {
+            return List.of();
+        }
+
+        @Override
+        public void saveStatsRun(MmpEndpointStatsRun run, List<MmpTransformStats> stats) {
+            writeCount++;
+        }
+
+        @Override
+        public Optional<MmpEndpointStatsRun> findStatsRun(String runId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<MmpEndpointStatsRun> listStatsRuns() {
+            return List.of();
+        }
+
+        @Override
+        public List<MmpTransformStats> listTransformStats(String runId) {
+            return List.of();
+        }
     }
 }
