@@ -10,7 +10,7 @@ Project coordinates:
 - AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.3.3`
 - AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.3.3`
 - Analytics module: `tech.molecules:structurized-analytics:0.3.3`
-- Workbench module: `tech.molecules:structurized-workbench:0.3.4-SNAPSHOT`
+- Workbench module: `tech.molecules:structurized-workbench:0.3.4`
 
 Build
 -----
