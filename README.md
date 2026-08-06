@@ -4,13 +4,13 @@ structurized
 Modular Java 23 Maven stack for cheminformatics and downstream analytics.
 
 Project coordinates:
-- Parent build: `tech.molecules:structurized:0.2.3`
-- Core module: `tech.molecules:structurized-core:0.2.3`
-- AI inspection module: `tech.molecules:structurized-ai-core:0.2.3`
-- AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.2.3`
-- AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.2.3`
-- Analytics module: `tech.molecules:structurized-analytics:0.2.3`
-- Workbench module: `tech.molecules:structurized-workbench:0.2.3`
+- Parent build: `tech.molecules:structurized:0.3.2`
+- Core module: `tech.molecules:structurized-core:0.3.2`
+- AI inspection module: `tech.molecules:structurized-ai-core:0.3.2`
+- AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.3.2`
+- AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.3.2`
+- Analytics module: `tech.molecules:structurized-analytics:0.3.2`
+- Workbench module: `tech.molecules:structurized-workbench:0.3.2`
 
 Build
 -----
@@ -23,9 +23,9 @@ Build
 - `mvn -pl structurized-ai-prism -am test` – run the AI Prism bridge and its dependencies
 - `mvn -pl structurized-ai-mcp -am test` – run the AI MCP adapter and its dependencies
 - `mvn -pl structurized-ai-mcp -am -Dgpg.skip=true -DskipTests package` – build the MCP standalone jar
-- `java -jar structurized-ai-mcp/target/structurized-ai-mcp-0.2.3-standalone.jar` – launch the stdio MCP adapter
+- `java -jar structurized-ai-mcp/target/structurized-ai-mcp-0.3.2-standalone.jar` – launch the stdio MCP adapter
 - `mvn -pl structurized-prismlite-app -am -Dgpg.skip=true -DskipTests package` – build the shared PrismLite + MCP desktop jar
-- `java -jar structurized-prismlite-app/target/structurized-prismlite-app-0.2.3-standalone.jar [--session-id=workspace] [dataset]` – launch PrismLite and stdio MCP over one managed session
+- `java -jar structurized-prismlite-app/target/structurized-prismlite-app-0.3.2-standalone.jar [--session-id=workspace] [dataset]` – launch PrismLite and stdio MCP over one managed session
 - `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
 - The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.

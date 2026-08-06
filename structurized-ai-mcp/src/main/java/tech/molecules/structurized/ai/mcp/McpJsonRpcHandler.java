@@ -117,7 +117,7 @@ public final class McpJsonRpcHandler {
         capabilities.put("tools", Map.of());
         Map<String, Object> serverInfo = new LinkedHashMap<>();
         serverInfo.put("name", "structurized-ai-mcp");
-        serverInfo.put("version", "0.2.3");
+        serverInfo.put("version", "0.3.2");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("protocolVersion", PROTOCOL_VERSION);
         result.put("capabilities", capabilities);
