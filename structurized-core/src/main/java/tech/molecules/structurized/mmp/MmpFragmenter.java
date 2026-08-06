@@ -22,6 +22,15 @@ public final class MmpFragmenter {
     private MmpFragmenter() {}
 
     public static List<MmpFragmentationRecord> fragment(MmpInputCompound input, MmpMiningConfig config) {
+        return fragmentWithMapping(input, config).stream()
+                .map(MmpFragmentationMatch::record)
+                .toList();
+    }
+
+    /**
+     * Enumerates canonical fragmentations and retains their atom/bond mapping to the input molecule.
+     */
+    public static List<MmpFragmentationMatch> fragmentWithMapping(MmpInputCompound input, MmpMiningConfig config) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(config, "config");
 
@@ -30,12 +39,12 @@ public final class MmpFragmenter {
 
         int totalHeavyAtoms = OpenChemLibUtil.heavyAtomCount(mol);
         List<Integer> candidateBonds = candidateCutBonds(mol, config);
-        Map<String, MmpFragmentationRecord> records = new LinkedHashMap<>();
+        Map<String, MmpFragmentationMatch> matches = new LinkedHashMap<>();
 
         for (int bond : candidateBonds) {
-            addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{bond}, records);
-            if (records.size() >= config.maxFragmentationRecordsPerCompound()) {
-                return List.copyOf(records.values());
+            addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{bond}, matches);
+            if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
+                return List.copyOf(matches.values());
             }
         }
 
@@ -47,15 +56,15 @@ public final class MmpFragmenter {
                     if (!isAllowedTwoCutSet(mol, config, b1, b2)) {
                         continue;
                     }
-                    addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{b1, b2}, records);
-                    if (records.size() >= config.maxFragmentationRecordsPerCompound()) {
-                        return List.copyOf(records.values());
+                    addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{b1, b2}, matches);
+                    if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
+                        return List.copyOf(matches.values());
                     }
                 }
             }
         }
 
-        return List.copyOf(records.values());
+        return List.copyOf(matches.values());
     }
 
     static List<Integer> candidateCutBonds(StereoMolecule mol, MmpMiningConfig config) {
@@ -114,7 +123,7 @@ public final class MmpFragmenter {
             MmpMiningConfig config,
             int totalHeavyAtoms,
             int[] cutBonds,
-            Map<String, MmpFragmentationRecord> records
+            Map<String, MmpFragmentationMatch> matches
     ) {
         Arrays.sort(cutBonds);
         List<BitSet> components = connectedComponentsAfterCuts(mol, cutBonds);
@@ -132,6 +141,9 @@ public final class MmpFragmenter {
         for (BitSet valueAtoms : components) {
             BitSet keyAtoms = allAtoms(mol);
             keyAtoms.andNot(valueAtoms);
+            if (!allCutsCrossPartition(mol, valueAtoms, cutBonds)) {
+                continue;
+            }
             int valueHeavyAtoms = heavyAtomCount(mol, valueAtoms);
             int keyHeavyAtoms = heavyAtomCount(mol, keyAtoms);
             if (!passesSizeFilters(config, totalHeavyAtoms, keyHeavyAtoms, valueHeavyAtoms)) {
@@ -149,8 +161,49 @@ public final class MmpFragmenter {
                     Arrays.stream(cutBonds).boxed().toList(),
                     null
             );
-            records.putIfAbsent(record.canonicalRecordId(), record);
+            MmpFragmentationMatch match = new MmpFragmentationMatch(
+                    record,
+                    atomIndices(keyAtoms),
+                    atomIndices(valueAtoms),
+                    attachments(mol, keyAtoms, valueAtoms, cutBonds, canonical.labels())
+            );
+            matches.putIfAbsent(record.canonicalRecordId(), match);
         }
+    }
+
+    private static boolean allCutsCrossPartition(StereoMolecule mol, BitSet valueAtoms, int[] cutBonds) {
+        for (int cutBond : cutBonds) {
+            int a1 = mol.getBondAtom(0, cutBond);
+            int a2 = mol.getBondAtom(1, cutBond);
+            if (valueAtoms.get(a1) == valueAtoms.get(a2)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<Integer> atomIndices(BitSet atoms) {
+        return atoms.stream().boxed().toList();
+    }
+
+    private static List<MmpAttachment> attachments(
+            StereoMolecule mol,
+            BitSet keyAtoms,
+            BitSet valueAtoms,
+            int[] cutBonds,
+            int[] labels
+    ) {
+        List<MmpAttachment> attachments = new ArrayList<>(cutBonds.length);
+        for (int i = 0; i < cutBonds.length; i++) {
+            int bond = cutBonds[i];
+            int a1 = mol.getBondAtom(0, bond);
+            int a2 = mol.getBondAtom(1, bond);
+            int keyAtom = keyAtoms.get(a1) ? a1 : a2;
+            int valueAtom = valueAtoms.get(a1) ? a1 : a2;
+            attachments.add(new MmpAttachment(labels[i], bond, keyAtom, valueAtom, mol.getBondType(bond)));
+        }
+        attachments.sort(Comparator.comparingInt(MmpAttachment::label));
+        return List.copyOf(attachments);
     }
 
     private static boolean passesSizeFilters(MmpMiningConfig config, int totalHeavyAtoms, int keyHeavyAtoms, int valueHeavyAtoms) {
@@ -208,7 +261,7 @@ public final class MmpFragmenter {
         for (int[] labels : labelPermutations) {
             String keyIdcode = canonicalFragmentIdcode(mol, keyAtoms, cutBonds, labels);
             String valueIdcode = canonicalFragmentIdcode(mol, valueAtoms, cutBonds, labels);
-            CanonicalRecord candidate = new CanonicalRecord(keyIdcode, valueIdcode);
+            CanonicalRecord candidate = new CanonicalRecord(keyIdcode, valueIdcode, labels.clone());
             if (best == null || candidate.compareTo(best) < 0) {
                 best = candidate;
             }
@@ -240,7 +293,7 @@ public final class MmpFragmenter {
             }
             int dummy = fragment.addAtom(0);
             fragment.setAtomCustomLabel(dummy, "R" + labels[i]);
-            fragment.addBond(mapped, dummy, Molecule.cBondTypeSingle);
+            fragment.addBond(mapped, dummy, mol.getBondType(bond));
         }
 
         fragment.ensureHelperArrays(Molecule.cHelperRings);
@@ -285,7 +338,7 @@ public final class MmpFragmenter {
         return sb.toString();
     }
 
-    private record CanonicalRecord(String keyIdcode, String valueIdcode) implements Comparable<CanonicalRecord> {
+    private record CanonicalRecord(String keyIdcode, String valueIdcode, int[] labels) implements Comparable<CanonicalRecord> {
         @Override
         public int compareTo(CanonicalRecord other) {
             int keyCmp = keyIdcode.compareTo(other.keyIdcode);

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,6 +78,40 @@ class MmpFragmenterTest {
 
         assertFalse(records.isEmpty());
         assertTrue(records.stream().allMatch(record -> record.cutCount() == 2));
+    }
+
+
+    @Test
+    void mappedFragmentationsExposeOriginalAttachmentsAndSelectionFiltering() throws Exception {
+        List<MmpFragmentationMatch> matches = MmpFragmenter.fragmentWithMapping(
+                new MmpInputCompound("query", parse("CCOc1ccccc1"), null),
+                relaxedConfig().toBuilder().maxCuts(1).build()
+        );
+
+        assertFalse(matches.isEmpty());
+        MmpFragmentationMatch match = matches.getFirst();
+        assertEquals(1, match.attachments().size());
+        MmpAttachment attachment = match.attachments().getFirst();
+        assertTrue(match.keyAtomIndices().contains(attachment.keyAtomIndex()));
+        assertTrue(match.valueAtomIndices().contains(attachment.valueAtomIndex()));
+        assertTrue(match.touchesAnyAtom(java.util.Set.of(attachment.keyAtomIndex())));
+        assertTrue(match.touchesAnyAtom(java.util.Set.of(attachment.valueAtomIndex())));
+        assertFalse(match.touchesAnyAtom(java.util.Set.of(10_000)));
+        assertTrue(match.touchesAnyAtom(java.util.Set.of()));
+    }
+
+
+    @Test
+    void acyclicTwoCutRecordsAlwaysHaveTwoMappedAttachments() throws Exception {
+        List<MmpFragmentationMatch> matches = MmpFragmenter.fragmentWithMapping(
+                new MmpInputCompound("linker", parse("CCOCC"), null),
+                relaxedConfig().toBuilder().maxCuts(2).build()
+        ).stream().filter(match -> match.record().cutCount() == 2).toList();
+
+        assertFalse(matches.isEmpty());
+        assertTrue(matches.stream().allMatch(match -> match.attachments().size() == 2));
+        assertTrue(matches.stream().allMatch(match -> match.attachments().stream()
+                .map(MmpAttachment::label).sorted().toList().equals(List.of(1, 2))));
     }
 
     private static MmpMiningConfig relaxedConfig() {
