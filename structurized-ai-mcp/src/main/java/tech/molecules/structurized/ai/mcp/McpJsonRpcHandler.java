@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.repository.StructureRepositoryService;
+import tech.molecules.structurized.ai.trace.AgentExplorationPhase;
+import tech.molecules.structurized.ai.trace.AgentExplorationTrace;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -19,26 +21,42 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public final class McpJsonRpcHandler {
     private static final String PROTOCOL_VERSION = "2024-11-05";
 
     private final ObjectMapper mapper;
     private final McpChemistryTools chemistryTools;
+    private final AgentExplorationTrace explorationTrace;
 
-    private McpJsonRpcHandler(ObjectMapper mapper, McpChemistryTools chemistryTools) {
+    private McpJsonRpcHandler(ObjectMapper mapper, McpChemistryTools chemistryTools, AgentExplorationTrace explorationTrace) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.chemistryTools = Objects.requireNonNull(chemistryTools, "chemistryTools");
+        this.explorationTrace = Objects.requireNonNull(explorationTrace, "explorationTrace");
     }
 
     public static McpJsonRpcHandler createDefault() {
         ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-        return new McpJsonRpcHandler(mapper, McpChemistryTools.createDefault(mapper));
+        return new McpJsonRpcHandler(mapper, McpChemistryTools.createDefault(mapper), new AgentExplorationTrace());
+    }
+
+    public static McpJsonRpcHandler createDefault(AgentExplorationTrace explorationTrace) {
+        ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        return new McpJsonRpcHandler(mapper, McpChemistryTools.createDefault(mapper), explorationTrace);
     }
 
     public static McpJsonRpcHandler create(StructureRepositoryService repositories, PrismBridgeService prism) {
         ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
-        return new McpJsonRpcHandler(mapper, McpChemistryTools.create(mapper, repositories, prism));
+        return new McpJsonRpcHandler(mapper, McpChemistryTools.create(mapper, repositories, prism), new AgentExplorationTrace());
+    }
+
+    public static McpJsonRpcHandler create(StructureRepositoryService repositories,
+                                           PrismBridgeService prism,
+                                           AgentExplorationTrace explorationTrace) {
+        ObjectMapper mapper = new ObjectMapper().disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        return new McpJsonRpcHandler(mapper, McpChemistryTools.create(mapper, repositories, prism), explorationTrace);
     }
 
     public String handleJson(String json) throws Exception {
@@ -149,16 +167,41 @@ public final class McpJsonRpcHandler {
         } else {
             throw new IllegalArgumentException("tools/call arguments must be an object");
         }
+        AgentToolTraceSemantics.Semantics semantics = AgentToolTraceSemantics.forTool(name);
+        String invocationId = UUID.randomUUID().toString();
+        long startedNanos = System.nanoTime();
+        explorationTrace.publish(invocationId, AgentExplorationPhase.STARTED, name,
+                semantics.activityType(), semantics.label(), null,
+                AgentToolTraceSemantics.requestReferences(name, arguments), null, null);
         try {
             McpChemistryTools.ToolCallResult result = chemistryTools.call(name, arguments);
+            explorationTrace.publish(invocationId, AgentExplorationPhase.COMPLETED, name,
+                    semantics.activityType(), semantics.label(), elapsedMillis(startedNanos),
+                    AgentToolTraceSemantics.resultReferences(name, arguments, result.structuredContent()), null, null);
             return toolResult(result.text(), result.structuredContent(), result.isError());
         } catch (ChemOperationException e) {
+            explorationTrace.publish(invocationId, AgentExplorationPhase.FAILED, name,
+                    semantics.activityType(), semantics.label(), elapsedMillis(startedNanos), List.of(), e.code(), null);
             ObjectNode structured = mapper.createObjectNode();
             structured.put("status", "error");
             structured.put("code", e.code());
             structured.put("message", e.getMessage());
             return toolResult(e.getMessage(), structured, true);
+        } catch (IllegalArgumentException e) {
+            explorationTrace.publish(invocationId, AgentExplorationPhase.FAILED, name,
+                    semantics.activityType(), semantics.label(), elapsedMillis(startedNanos), List.of(),
+                    "invalid_arguments", null);
+            throw e;
+        } catch (Exception e) {
+            explorationTrace.publish(invocationId, AgentExplorationPhase.FAILED, name,
+                    semantics.activityType(), semantics.label(), elapsedMillis(startedNanos), List.of(),
+                    "internal_chemistry_error", null);
+            throw e;
         }
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos));
     }
 
     private ObjectNode toolResult(String text, JsonNode structuredContent, boolean isError) {
