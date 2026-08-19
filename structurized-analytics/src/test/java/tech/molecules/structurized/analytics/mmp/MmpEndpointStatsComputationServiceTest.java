@@ -75,7 +75,9 @@ class MmpEndpointStatsComputationServiceTest {
 
             for (MmpEndpointStatsRun run : result.statsRuns()) {
                 assertTrue(repository.findStatsRun(run.runId()).isPresent());
-                assertFalse(repository.listTransformStats(run.runId()).isEmpty());
+                List<MmpTransformStats> persistedStats = repository.listTransformStats(run.runId());
+                assertFalse(persistedStats.isEmpty());
+                assertTrue(persistedStats.stream().anyMatch(stats -> !stats.examplePairs().isEmpty()));
             }
         }
     }

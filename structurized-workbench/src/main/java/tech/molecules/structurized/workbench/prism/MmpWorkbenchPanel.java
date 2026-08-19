@@ -18,6 +18,7 @@ import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultCellEditor;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -31,6 +32,7 @@ import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingWorker;
 import javax.swing.RowSorter;
+import javax.swing.RowFilter;
 import javax.swing.SortOrder;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.AbstractTableModel;
@@ -38,15 +40,12 @@ import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
-import java.awt.GridLayout;
 import java.nio.file.Path;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -67,8 +66,13 @@ public final class MmpWorkbenchPanel extends JPanel {
     private final JTable runTable = new JTable(runModel);
     private final TransformStatsTableModel statsModel = new TransformStatsTableModel();
     private final JTable statsTable = new JTable(statsModel);
+    private final TableRowSorter<TransformStatsTableModel> statsSorter = new TableRowSorter<>(statsModel);
     private final ExamplePairTableModel pairModel = new ExamplePairTableModel();
     private final JTable pairTable = new JTable(pairModel);
+    private final JComboBox<CutFilter> cutFilter = new JComboBox<>(CutFilter.values());
+    private final JLabel transformCountLabel = new JLabel("0 transformations");
+    private final MmpChemistryDetailPanel chemistryDetail = new MmpChemistryDetailPanel();
+    private final MmpRecommendationPanel recommendationPanel = new MmpRecommendationPanel();
     private final JTextField databaseField = new JTextField(34);
     private final JTextArea preflightArea = new JTextArea(7, 60);
     private final JLabel statusLabel = new JLabel("Load a PRISM repository to compute MMP endpoint statistics.");
@@ -83,8 +87,11 @@ public final class MmpWorkbenchPanel extends JPanel {
 
     public MmpWorkbenchPanel() {
         super(new BorderLayout(8, 8));
-        add(buildSetupPanel(), BorderLayout.NORTH);
-        add(buildResultsPanel(), BorderLayout.CENTER);
+        add(buildDatabasePanel(), BorderLayout.NORTH);
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Statistics", buildStatisticsPanel());
+        tabs.addTab("Recommendations", recommendationPanel);
+        add(tabs, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
 
         endpointModel.addTableModelListener(event -> refreshPreflight());
@@ -100,6 +107,12 @@ public final class MmpWorkbenchPanel extends JPanel {
                 loadSelectedExamplePairs();
             }
         });
+        pairTable.getSelectionModel().addListSelectionListener(event -> {
+            if (!event.getValueIsAdjusting()) {
+                loadSelectedPairDetail();
+            }
+        });
+        cutFilter.addActionListener(event -> applyCutFilter());
     }
 
     public void setModel(PrismWorkbenchModel model, StructureProvider structureProvider) {
@@ -109,6 +122,7 @@ public final class MmpWorkbenchPanel extends JPanel {
         updateSubjectSetEditor();
         statsModel.setStats(List.of());
         pairModel.setPairs(List.of());
+        chemistryDetail.clear();
         refreshPreflight();
     }
 
@@ -117,6 +131,7 @@ public final class MmpWorkbenchPanel extends JPanel {
         databaseField.setText(databasePath == null ? "" : databasePath.toString());
         refreshPreflight();
         refreshPersistedRuns();
+        recommendationPanel.setDatabasePath(databasePath);
     }
 
     public String getPreflightText() {
@@ -127,15 +142,7 @@ public final class MmpWorkbenchPanel extends JPanel {
         return runButton.isEnabled();
     }
 
-    private JPanel buildSetupPanel() {
-        endpointTable.setAutoCreateRowSorter(true);
-        endpointTable.setFillsViewportHeight(true);
-        if (endpointTable.getRowSorter() instanceof TableRowSorter<?> sorter) {
-            @SuppressWarnings("unchecked")
-            TableRowSorter<EndpointSetupTableModel> typed = (TableRowSorter<EndpointSetupTableModel>) sorter;
-            typed.setSortKeys(List.of(new RowSorter.SortKey(1, SortOrder.ASCENDING)));
-        }
-
+    private JPanel buildDatabasePanel() {
         JPanel databasePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         databaseField.setEditable(false);
         JButton chooseDatabaseButton = new JButton("Choose SQLite DB");
@@ -144,6 +151,24 @@ public final class MmpWorkbenchPanel extends JPanel {
         databasePanel.add(databaseField);
         databasePanel.add(chooseDatabaseButton);
         databasePanel.add(refreshRunsButton);
+        return databasePanel;
+    }
+
+    private JPanel buildStatisticsPanel() {
+        JPanel panel = new JPanel(new BorderLayout(6, 6));
+        panel.add(buildComputationSetupPanel(), BorderLayout.NORTH);
+        panel.add(buildResultsPanel(), BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel buildComputationSetupPanel() {
+        endpointTable.setAutoCreateRowSorter(true);
+        endpointTable.setFillsViewportHeight(true);
+        if (endpointTable.getRowSorter() instanceof TableRowSorter<?> sorter) {
+            @SuppressWarnings("unchecked")
+            TableRowSorter<EndpointSetupTableModel> typed = (TableRowSorter<EndpointSetupTableModel>) sorter;
+            typed.setSortKeys(List.of(new RowSorter.SortKey(1, SortOrder.ASCENDING)));
+        }
 
         JPanel configPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         configPanel.add(new JLabel("Max cuts:"));
@@ -158,7 +183,6 @@ public final class MmpWorkbenchPanel extends JPanel {
 
         JPanel top = new JPanel(new BorderLayout(6, 6));
         top.setBorder(BorderFactory.createTitledBorder("MMP Run Setup"));
-        top.add(databasePanel, BorderLayout.NORTH);
         top.add(new JScrollPane(endpointTable), BorderLayout.CENTER);
 
         JPanel south = new JPanel(new BorderLayout(6, 6));
@@ -170,12 +194,25 @@ public final class MmpWorkbenchPanel extends JPanel {
 
     private JPanel buildResultsPanel() {
         runTable.setAutoCreateRowSorter(true);
-        statsTable.setAutoCreateRowSorter(true);
+        statsTable.setRowSorter(statsSorter);
         pairTable.setAutoCreateRowSorter(true);
 
-        JSplitPane lowerSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(statsTable), new JScrollPane(pairTable));
-        lowerSplit.setResizeWeight(0.72);
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(runTable), lowerSplit);
+        JPanel statsPanel = new JPanel(new BorderLayout(4, 4));
+        JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        filterPanel.add(new JLabel("Cuts:"));
+        filterPanel.add(cutFilter);
+        filterPanel.add(transformCountLabel);
+        statsPanel.add(filterPanel, BorderLayout.NORTH);
+        statsPanel.add(new JScrollPane(statsTable), BorderLayout.CENTER);
+
+        JSplitPane tableSplit = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT, statsPanel, new JScrollPane(pairTable));
+        tableSplit.setResizeWeight(0.68);
+        JSplitPane resultDetailSplit = new JSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT, tableSplit, chemistryDetail);
+        resultDetailSplit.setResizeWeight(0.54);
+        JSplitPane split = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT, new JScrollPane(runTable), resultDetailSplit);
         split.setResizeWeight(0.32);
 
         JPanel panel = new JPanel(new BorderLayout());
@@ -345,10 +382,16 @@ public final class MmpWorkbenchPanel extends JPanel {
             runModel.setRuns(List.of());
             statsModel.setStats(List.of());
             pairModel.setPairs(List.of());
+            chemistryDetail.clear();
+            updateTransformCount();
             return;
         }
         try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.open(databasePath)) {
             runModel.setRuns(repository.listStatsRuns());
+            statsModel.setStats(List.of());
+            pairModel.setPairs(List.of());
+            chemistryDetail.clear();
+            updateTransformCount();
             statusLabel.setText("Loaded " + runModel.getRowCount() + " MMP stats runs from " + databasePath);
         } catch (Exception e) {
             statusLabel.setText("Failed to read MMP DB: " + rootMessage(e));
@@ -360,12 +403,18 @@ public final class MmpWorkbenchPanel extends JPanel {
         if (databasePath == null || selectedRow < 0) {
             statsModel.setStats(List.of());
             pairModel.setPairs(List.of());
+            chemistryDetail.clear();
+            updateTransformCount();
             return;
         }
         MmpEndpointStatsRun run = runModel.runAt(runTable.convertRowIndexToModel(selectedRow));
         try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.open(databasePath)) {
+            statsTable.clearSelection();
+            pairTable.clearSelection();
             statsModel.setStats(repository.listTransformStats(run.runId()));
             pairModel.setPairs(List.of());
+            chemistryDetail.clear();
+            updateTransformCount();
             statusLabel.setText("Loaded " + statsModel.getRowCount() + " transform stats for " + run.runId());
         } catch (Exception e) {
             statusLabel.setText("Failed to read transform stats: " + rootMessage(e));
@@ -376,10 +425,75 @@ public final class MmpWorkbenchPanel extends JPanel {
         int selectedRow = statsTable.getSelectedRow();
         if (selectedRow < 0) {
             pairModel.setPairs(List.of());
+            chemistryDetail.clear();
             return;
         }
         MmpTransformStats stats = statsModel.statAt(statsTable.convertRowIndexToModel(selectedRow));
         pairModel.setPairs(stats.examplePairs());
+        chemistryDetail.showTransform(stats);
+        if (pairModel.getRowCount() > 0) {
+            pairTable.setRowSelectionInterval(0, 0);
+        }
+    }
+
+    private void loadSelectedPairDetail() {
+        int statsViewRow = statsTable.getSelectedRow();
+        int pairViewRow = pairTable.getSelectedRow();
+        if (statsViewRow < 0) {
+            chemistryDetail.clear();
+            return;
+        }
+        MmpTransformStats stats = statsModel.statAt(statsTable.convertRowIndexToModel(statsViewRow));
+        if (pairViewRow < 0) {
+            chemistryDetail.showTransform(stats);
+            return;
+        }
+        MmpPair pair = pairModel.pairAt(pairTable.convertRowIndexToModel(pairViewRow));
+        chemistryDetail.showPair(stats, pair);
+    }
+
+    private void applyCutFilter() {
+        CutFilter selected = (CutFilter) cutFilter.getSelectedItem();
+        CutFilter effective = selected == null ? CutFilter.ALL : selected;
+        statsSorter.setRowFilter(new RowFilter<>() {
+            @Override
+            public boolean include(Entry<? extends TransformStatsTableModel, ? extends Integer> entry) {
+                return effective.includes(entry.getModel().statAt(entry.getIdentifier()).cutCount());
+            }
+        });
+        statsTable.clearSelection();
+        pairTable.clearSelection();
+        pairModel.setPairs(List.of());
+        chemistryDetail.clear();
+        updateTransformCount();
+    }
+
+    private void updateTransformCount() {
+        int total = statsModel.getRowCount();
+        int visible = statsTable.getRowCount();
+        transformCountLabel.setText(visible == total
+                ? total + " transformations"
+                : visible + " of " + total + " transformations");
+    }
+
+    int visibleTransformCount() {
+        return statsTable.getRowCount();
+    }
+
+    void setCutFilter(Integer cuts) {
+        cutFilter.setSelectedItem(CutFilter.forCuts(cuts));
+    }
+
+    MmpChemistryDetailPanel chemistryDetail() {
+        return chemistryDetail;
+    }
+
+    void selectRunRow(int viewRow) {
+        runTable.setRowSelectionInterval(viewRow, viewRow);
+    }
+
+    void selectTransformRow(int viewRow) {
+        statsTable.setRowSelectionInterval(viewRow, viewRow);
     }
 
     private static Optional<String> inferSubjectSetId(EndpointDefinition endpoint, List<SubjectSet> subjectSets) {
@@ -442,6 +556,36 @@ public final class MmpWorkbenchPanel extends JPanel {
     private record EndpointRow(boolean selected, EndpointDefinition endpoint, String subjectSetId) {}
 
     private record Preflight(boolean canRun, String message) {}
+
+    private enum CutFilter {
+        ALL("All", null),
+        ONE("1-cut", 1),
+        TWO("2-cut", 2);
+
+        private final String label;
+        private final Integer cuts;
+
+        CutFilter(String label, Integer cuts) {
+            this.label = label;
+            this.cuts = cuts;
+        }
+
+        boolean includes(int candidate) {
+            return cuts == null || cuts == candidate;
+        }
+
+        static CutFilter forCuts(Integer cuts) {
+            if (cuts == null) return ALL;
+            if (cuts == 1) return ONE;
+            if (cuts == 2) return TWO;
+            throw new IllegalArgumentException("cuts must be null, 1, or 2");
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
 
     private static final class EndpointSetupTableModel extends AbstractTableModel {
         private final String[] columns = {"Run", "Endpoint", "Name", "Measured Subject Set"};
@@ -630,6 +774,10 @@ public final class MmpWorkbenchPanel extends JPanel {
         @Override
         public int getColumnCount() {
             return columns.length;
+        }
+
+        MmpPair pairAt(int row) {
+            return pairs.get(row);
         }
 
         @Override

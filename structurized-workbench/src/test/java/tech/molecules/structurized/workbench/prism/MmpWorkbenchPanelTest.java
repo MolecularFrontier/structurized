@@ -2,6 +2,10 @@ package tech.molecules.structurized.workbench.prism;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsRun;
+import tech.molecules.structurized.analytics.mmp.SqliteMmpAnalyticsRepository;
+import tech.molecules.structurized.mmp.MmpPair;
+import tech.molecules.structurized.mmp.MmpTransformStats;
 import tech.molecules.structurized.prism.model.EndpointDataType;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.model.EndpointType;
@@ -16,8 +20,12 @@ import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
 
 import javax.swing.SwingUtilities;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MmpWorkbenchPanelTest {
@@ -42,6 +50,46 @@ class MmpWorkbenchPanelTest {
 
         assertTrue(panel.isRunEnabled());
         assertTrue(panel.getPreflightText().contains("ic50 -> /prism/endpoints/ic50/measured-subjects subjects=2"));
+    }
+
+    @Test
+    void persistedResultsFilterByCutCountAndDriveChemistryDetail(@TempDir Path tempDir) throws Exception {
+        Path database = tempDir.resolve("persisted.sqlite");
+        MmpPair oneCut = MmpChemistryDetailPanelTest.pair(1,
+                MmpTestFragments.idcode(6, 1),
+                MmpTestFragments.idcode(7, 1),
+                MmpTestFragments.idcode(8, 1));
+        MmpPair twoCut = MmpChemistryDetailPanelTest.pair(2,
+                MmpTestFragments.idcode(6, 2),
+                MmpTestFragments.idcode(7, 2),
+                MmpTestFragments.idcode(8, 2));
+        List<MmpTransformStats> stats = List.of(
+                MmpChemistryDetailPanelTest.stats(oneCut),
+                MmpChemistryDetailPanelTest.stats(twoCut));
+        try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.open(database)) {
+            repository.saveStatsRun(new MmpEndpointStatsRun(
+                    "run-1", "solubility", "measured", "global", "mmp-hash", "stats-hash",
+                    Instant.parse("2026-08-06T10:00:00Z"), 12, 10, 2, 2, null), stats);
+        }
+
+        AtomicReference<MmpWorkbenchPanel> panelRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            MmpWorkbenchPanel panel = new MmpWorkbenchPanel();
+            panel.setDatabasePath(database);
+            panel.selectRunRow(0);
+            assertEquals(2, panel.visibleTransformCount());
+
+            panel.setCutFilter(1);
+            assertEquals(1, panel.visibleTransformCount());
+            panel.setCutFilter(2);
+            assertEquals(1, panel.visibleTransformCount());
+
+            panel.selectTransformRow(0);
+            assertEquals(2, panel.chemistryDetail().displayedCutCount());
+            assertNotNull(panel.chemistryDetail().displayedKey());
+            panelRef.set(panel);
+        });
+        assertNotNull(panelRef.get());
     }
 
     private static MmpWorkbenchPanel panelFor(Path tempDir, InMemoryPrismDataset dataset) throws Exception {

@@ -14,7 +14,9 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -24,6 +26,7 @@ import java.util.stream.Collectors;
  */
 public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository, MmpPairRepository,
         MmpEndpointStatsRepository, AutoCloseable {
+    private static final int SQLITE_IN_CHUNK_SIZE = 400;
     private final Connection connection;
 
     public SqliteMmpAnalyticsRepository(Connection connection) {
@@ -288,6 +291,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     @Override
     public List<MmpTransformStats> listTransformStats(String runId) {
+        Map<String, List<MmpPair>> examplePairsByTransform = listExamplePairsByTransform(runId);
         try (PreparedStatement ps = connection.prepareStatement("""
                 select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
                        mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
@@ -312,7 +316,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                             rs.getDouble("min_delta"),
                             rs.getDouble("max_delta"),
                             rs.getDouble("positive_fraction"),
-                            listExamplePairs(runId, transformId)
+                            examplePairsByTransform.getOrDefault(transformId, List.of())
                     ));
                 }
             }
@@ -320,6 +324,73 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         } catch (SQLException e) {
             throw new IllegalStateException("failed to list MMP transform stats for run " + runId, e);
         }
+    }
+
+    @Override
+    public List<MmpTransformStats> findTransformStatsBySourceFragments(
+            String runId,
+            int cutCount,
+            java.util.Set<String> fromValueIdcodes
+    ) {
+        if (cutCount < 1 || cutCount > 2) {
+            throw new IllegalArgumentException("cutCount must be 1 or 2");
+        }
+        List<String> sources = normalizedKeys(fromValueIdcodes);
+        if (sources.isEmpty()) return List.of();
+        ArrayList<MmpTransformStats> stats = new ArrayList<>();
+        for (List<String> chunk : chunks(sources)) {
+            String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+            String sql = """
+                    select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
+                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
+                    from mmp_endpoint_transform_stats
+                    where run_id = ? and cut_count = ? and from_value_idcode in (%s)
+                    order by transform_id
+                    """.formatted(placeholders);
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, runId);
+                ps.setInt(2, cutCount);
+                bindStrings(ps, 3, chunk);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) stats.add(readTransformStats(rs, List.of()));
+                }
+            } catch (SQLException e) {
+                throw new IllegalStateException(
+                        "failed to find MMP transform stats by source fragments for run " + runId, e);
+            }
+        }
+        return attachExamplePairs(runId, stats);
+    }
+
+    @Override
+    public List<MmpTransformStats> findTransformStatsByIds(
+            String runId,
+            java.util.Set<String> transformIds
+    ) {
+        List<String> ids = normalizedKeys(transformIds);
+        if (ids.isEmpty()) return List.of();
+        ArrayList<MmpTransformStats> stats = new ArrayList<>();
+        for (List<String> chunk : chunks(ids)) {
+            String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+            String sql = """
+                    select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
+                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
+                    from mmp_endpoint_transform_stats
+                    where run_id = ? and transform_id in (%s)
+                    order by transform_id
+                    """.formatted(placeholders);
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, runId);
+                bindStrings(ps, 2, chunk);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) stats.add(readTransformStats(rs, List.of()));
+                }
+            } catch (SQLException e) {
+                throw new IllegalStateException(
+                        "failed to find MMP transform stats by ID for run " + runId, e);
+            }
+        }
+        return attachExamplePairs(runId, stats);
     }
 
     private static MmpUniverse readUniverse(ResultSet rs) throws SQLException {
@@ -507,23 +578,126 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         }
     }
 
-    private List<MmpPair> listExamplePairs(String runId, String transformId) throws SQLException {
+    private Map<String, List<MmpPair>> listExamplePairsByTransform(String runId) {
         try (PreparedStatement ps = connection.prepareStatement("""
                 select compound_id_a, compound_id_b, value_a, value_b, delta, key_idcode,
                        from_value_idcode, to_value_idcode, transform_id, cut_count
                 from mmp_endpoint_example_pair
-                where run_id = ? and transform_id = ?
-                order by ordinal
+                where run_id = ?
+                order by transform_id, ordinal
                 """)) {
             ps.setString(1, runId);
-            ps.setString(2, transformId);
-            ArrayList<MmpPair> pairs = new ArrayList<>();
+            LinkedHashMap<String, ArrayList<MmpPair>> mutable = new LinkedHashMap<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    pairs.add(readPair(rs));
+                    MmpPair pair = readPair(rs);
+                    mutable.computeIfAbsent(pair.transformId(), ignored -> new ArrayList<>()).add(pair);
                 }
             }
-            return List.copyOf(pairs);
+            LinkedHashMap<String, List<MmpPair>> result = new LinkedHashMap<>();
+            mutable.forEach((transformId, pairs) -> result.put(transformId, List.copyOf(pairs)));
+            return Map.copyOf(result);
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to list MMP example pairs for run " + runId, e);
+        }
+    }
+
+    private List<MmpTransformStats> attachExamplePairs(
+            String runId,
+            List<MmpTransformStats> stats
+    ) {
+        if (stats.isEmpty()) return List.of();
+        java.util.Set<String> ids = stats.stream()
+                .map(MmpTransformStats::transformId)
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        Map<String, List<MmpPair>> examples = listExamplePairsByTransformIds(runId, ids);
+        return stats.stream()
+                .map(stat -> new MmpTransformStats(
+                        stat.transformId(), stat.fromValueIdcode(), stat.toValueIdcode(),
+                        stat.cutCount(), stat.supportCount(), stat.meanDelta(), stat.medianDelta(),
+                        stat.standardDeviation(), stat.minDelta(), stat.maxDelta(),
+                        stat.positiveFraction(),
+                        examples.getOrDefault(stat.transformId(), List.of())))
+                .sorted(java.util.Comparator.comparing(MmpTransformStats::transformId))
+                .toList();
+    }
+
+    private Map<String, List<MmpPair>> listExamplePairsByTransformIds(
+            String runId,
+            java.util.Set<String> transformIds
+    ) {
+        List<String> ids = normalizedKeys(transformIds);
+        if (ids.isEmpty()) return Map.of();
+        LinkedHashMap<String, ArrayList<MmpPair>> mutable = new LinkedHashMap<>();
+        for (List<String> chunk : chunks(ids)) {
+            String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+            String sql = """
+                    select compound_id_a, compound_id_b, value_a, value_b, delta, key_idcode,
+                           from_value_idcode, to_value_idcode, transform_id, cut_count
+                    from mmp_endpoint_example_pair
+                    where run_id = ? and transform_id in (%s)
+                    order by transform_id, ordinal
+                    """.formatted(placeholders);
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, runId);
+                bindStrings(ps, 2, chunk);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        MmpPair pair = readPair(rs);
+                        mutable.computeIfAbsent(pair.transformId(), ignored -> new ArrayList<>()).add(pair);
+                    }
+                }
+            } catch (SQLException e) {
+                throw new IllegalStateException(
+                        "failed to find MMP example pairs for run " + runId, e);
+            }
+        }
+        LinkedHashMap<String, List<MmpPair>> result = new LinkedHashMap<>();
+        mutable.forEach((transformId, pairs) -> result.put(transformId, List.copyOf(pairs)));
+        return Map.copyOf(result);
+    }
+
+    private static MmpTransformStats readTransformStats(
+            ResultSet rs,
+            List<MmpPair> examples
+    ) throws SQLException {
+        return new MmpTransformStats(
+                rs.getString("transform_id"),
+                rs.getString("from_value_idcode"),
+                rs.getString("to_value_idcode"),
+                rs.getInt("cut_count"),
+                rs.getInt("support_count"),
+                rs.getDouble("mean_delta"),
+                rs.getDouble("median_delta"),
+                rs.getDouble("standard_deviation"),
+                rs.getDouble("min_delta"),
+                rs.getDouble("max_delta"),
+                rs.getDouble("positive_fraction"),
+                examples);
+    }
+
+    private static List<String> normalizedKeys(Iterable<String> values) {
+        java.util.TreeSet<String> normalized = new java.util.TreeSet<>();
+        if (values != null) {
+            for (String value : values) {
+                if (value != null && !value.isBlank()) normalized.add(value.trim());
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static List<List<String>> chunks(List<String> values) {
+        ArrayList<List<String>> chunks = new ArrayList<>();
+        for (int start = 0; start < values.size(); start += SQLITE_IN_CHUNK_SIZE) {
+            chunks.add(values.subList(start, Math.min(values.size(), start + SQLITE_IN_CHUNK_SIZE)));
+        }
+        return List.copyOf(chunks);
+    }
+
+    private static void bindStrings(PreparedStatement statement, int offset, List<String> values)
+            throws SQLException {
+        for (int index = 0; index < values.size(); index++) {
+            statement.setString(offset + index, values.get(index));
         }
     }
 
