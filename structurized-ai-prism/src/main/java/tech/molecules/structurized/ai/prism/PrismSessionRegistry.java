@@ -15,6 +15,12 @@ public interface PrismSessionRegistry {
                                  InMemoryPrismDataset dataContext,
                                  PrismSession workspace);
 
+    ManagedPrismSession replace(String sessionId,
+                                String label,
+                                Path sourcePath,
+                                InMemoryPrismDataset dataContext,
+                                PrismSession workspace);
+
     Optional<ManagedPrismSession> find(String sessionId);
 
     Optional<ManagedPrismSession> findByWorkspace(PrismSession workspace);

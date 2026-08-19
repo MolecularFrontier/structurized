@@ -7,6 +7,8 @@ import java.util.List;
 public interface PrismBridgeService {
     PrismDatasetSummary openDataset(OpenPrismDatasetRequest request);
 
+    PrismDatasetSummary reloadDataset(String sessionId);
+
     PrismSessionSummary openPack(OpenPrismPackRequest request);
 
     List<PrismDatasetSummary> listDatasets();

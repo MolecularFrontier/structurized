@@ -271,6 +271,10 @@ final class McpChemistryTools {
                         Path.of(requiredString(args, "path")),
                         optionalString(args, "dataset_id", null),
                         optionalString(args, "label", null))));
+        add(result, "reload_prism_dataset", "Reloads a TSV-backed Prism session from its original path under the same session ID. Derived row sets, graphs, analyses, and molecule lists are reset.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Existing TSV-backed managed Prism session ID.")),
+                args -> prism.reloadDataset(requiredString(args, "session_id")));
         add(result, "open_prism_pack", "Opens a PrismPack directory as a managed PrismSession without TSV materialization.", schema(
                 required("path"),
                 prop("path", "string", "Path to a PrismPack directory."),

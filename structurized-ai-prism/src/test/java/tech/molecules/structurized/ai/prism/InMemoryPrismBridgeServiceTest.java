@@ -18,6 +18,7 @@ import tech.molecules.structurized.prism.result.NumericResult;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
 
@@ -48,6 +49,27 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(2, subjects.size());
         assertEquals("CMP-001", subjects.getFirst().subjectId());
         assertEquals("chemist-a", subjects.getFirst().metadata().get("chemist"));
+    }
+
+    @Test
+    void reloadsTsvDatasetUnderTheSameSessionIdAndResetsDerivedState() throws Exception {
+        Path dataset = prismDataset();
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(dataset, "demo", "Demo dataset"));
+        ManagedPrismSession before = ctx.registry.require("demo");
+        ctx.prism.createEndpointRowSet(new CreatePrismEndpointRowSetRequest(
+                "demo", "pIC50", "potent", null, "gte", 7.0, null, null, null, null));
+        Files.writeString(dataset.resolve("subjects.prism.tsv"),
+                "CMP-005\tS-005\tB-005\tKinase\tC\tCCO\tchemist-e\n",
+                StandardOpenOption.APPEND);
+
+        PrismDatasetSummary reloaded = ctx.prism.reloadDataset("demo");
+
+        assertEquals("demo", reloaded.sessionId());
+        assertEquals("Demo dataset", reloaded.label());
+        assertEquals(5, reloaded.subjectCount());
+        assertTrue(ctx.registry.require("demo") != before);
+        assertFalse(ctx.prism.listRowSets("demo").stream().anyMatch(rowSet -> rowSet.rowSetId().equals("potent")));
     }
 
     @Test

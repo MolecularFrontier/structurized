@@ -139,6 +139,34 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     }
 
     @Override
+    public synchronized PrismDatasetSummary reloadDataset(String sessionId) {
+        ManagedPrismSession existing = session(sessionId);
+        if (existing.dataContext().isEmpty()) {
+            throw new ChemOperationException(
+                    "prism_dataset_reload_unavailable",
+                    "Prism session " + existing.sessionId() + " was opened from a PrismPack rather than a TSV dataset."
+            );
+        }
+        Path sourcePath = existing.sourcePath().toAbsolutePath().normalize();
+        try {
+            InMemoryPrismDataset dataset = PrismTsvSnapshotLoader.isSnapshot(sourcePath)
+                    ? PrismTsvSnapshotLoader.load(sourcePath).dataset()
+                    : PrismTsvDatasetLoader.load(sourcePath);
+            PrismSession workspace = PrismSessionImporter.toSession(dataset, sourcePath);
+            ensureAllRowSet(workspace);
+            ManagedPrismSession replacement = sessionRegistry.replace(
+                    existing.sessionId(), existing.label(), sourcePath, dataset, workspace);
+            return datasetSummary(replacement);
+        } catch (IOException | RuntimeException exception) {
+            throw new ChemOperationException(
+                    "invalid_prism_dataset",
+                    "Could not reload Prism dataset from " + sourcePath + ".",
+                    exception
+            );
+        }
+    }
+
+    @Override
     public synchronized PrismSessionSummary openPack(OpenPrismPackRequest request) {
         Objects.requireNonNull(request, "request");
         if (request.path() == null) {

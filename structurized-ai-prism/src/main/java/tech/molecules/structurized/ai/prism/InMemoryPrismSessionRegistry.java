@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 public final class InMemoryPrismSessionRegistry implements PrismSessionRegistry {
     private final ManagedPrismSessionExecutor executor;
     private final Map<String, ManagedPrismSession> sessions = new LinkedHashMap<>();
+    private final Map<String, ManagedPrismSessionSubscription> sessionSubscriptions = new LinkedHashMap<>();
     private final CopyOnWriteArrayList<Consumer<ManagedPrismSessionChange>> listeners = new CopyOnWriteArrayList<>();
 
     public InMemoryPrismSessionRegistry() {
@@ -44,7 +45,26 @@ public final class InMemoryPrismSessionRegistry implements PrismSessionRegistry 
         }
         ManagedPrismSession managed = new ManagedPrismSession(
                 sessionId, label, sourcePath, dataContext, workspace, Instant.now(), executor);
-        managed.subscribe(this::publish);
+        sessionSubscriptions.put(sessionId, managed.subscribe(this::publish));
+        sessions.put(sessionId, managed);
+        return managed;
+    }
+
+    @Override
+    public synchronized ManagedPrismSession replace(String sessionId,
+                                                    String label,
+                                                    Path sourcePath,
+                                                    InMemoryPrismDataset dataContext,
+                                                    PrismSession workspace) {
+        if (!sessions.containsKey(sessionId)) {
+            throw new ChemOperationException("prism_session_not_found", "Prism session " + sessionId + " does not exist.");
+        }
+        ManagedPrismSession managed = new ManagedPrismSession(
+                sessionId, label, sourcePath, dataContext, Objects.requireNonNull(workspace, "workspace"),
+                Instant.now(), executor);
+        ManagedPrismSessionSubscription previousSubscription = sessionSubscriptions.remove(sessionId);
+        if (previousSubscription != null) previousSubscription.close();
+        sessionSubscriptions.put(sessionId, managed.subscribe(this::publish));
         sessions.put(sessionId, managed);
         return managed;
     }
