@@ -25,7 +25,9 @@ Build
 - `mvn -pl structurized-ai-mcp -am -Dgpg.skip=true -DskipTests package` – build the MCP standalone jar
 - `java -jar structurized-ai-mcp/target/structurized-ai-mcp-0.3.3-standalone.jar` – launch the stdio MCP adapter
 - `mvn -pl structurized-prismlite-app -am -Dgpg.skip=true -DskipTests package` – build the shared PrismLite + MCP desktop jar
-- `java -jar structurized-prismlite-app/target/structurized-prismlite-app-0.3.3-standalone.jar [--session-id=workspace] [dataset]` – launch PrismLite and stdio MCP over one managed session
+- `java -jar structurized-prismlite-app/target/structurized-prismlite-app-0.3.3-standalone.jar [--session-id=workspace] [--record-agent-trace=/path/session.jsonl | --replay-agent-trace=/path/session.jsonl] [dataset]` – launch PrismLite and stdio MCP over one managed session
+- The desktop `Agent Trace` tab visualizes live or recorded tool activity over the Project River and the selected MMP/similarity graph, with presentation-timed playback, scrubbing, and speed controls.
+- `Export Bundle` writes an opt-in `.agenttrace.zip` containing the trace, selected graph snapshot, proposed molecule sidecars, and a dataset fingerprint. The project dataset itself remains external.
 - `mvn -pl structurized-core exec:java -Dexec.mainClass=tech.molecules.structurized.gui.PairTransformationSwingApp` – launch the A/B transformation debugger
 - `mvn -pl structurized-workbench -am exec:java -Dexec.mainClass=tech.molecules.structurized.workbench.PrismWorkbenchApp -Dexec.args=/path/to/prism-tsv-folder` – launch the PRISM workbench
 - The workbench includes an `MMP Analytics` tab for selecting numeric PRISM endpoints, mapping measured subject sets, computing MMP endpoint statistics into SQLite, and browsing persisted runs.

@@ -5,6 +5,7 @@ import tech.molecules.structurized.ai.prism.ManagedPrismSession;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.prism.PrismSessionRegistry;
 import tech.molecules.structurized.ai.repository.InMemoryStructureRepositoryService;
+import tech.molecules.structurized.ai.trace.AgentExplorationTrace;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prismlite.swing.PrismLiteSwingContext;
@@ -22,14 +23,24 @@ import java.util.Objects;
 public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
     private final PrismSessionRegistry registry;
     private final PrismBridgeService bridge;
+    private final AgentExplorationTrace explorationTrace;
+    private final Path initialReplay;
 
     public SharedPrismLiteExtension(PrismSessionRegistry registry) {
-        this(registry, new InMemoryPrismBridgeService(new InMemoryStructureRepositoryService(), registry));
+        this(registry, new InMemoryPrismBridgeService(new InMemoryStructureRepositoryService(), registry),
+                new AgentExplorationTrace(), null);
     }
 
     public SharedPrismLiteExtension(PrismSessionRegistry registry, PrismBridgeService bridge) {
+        this(registry, bridge, new AgentExplorationTrace(), null);
+    }
+
+    public SharedPrismLiteExtension(PrismSessionRegistry registry, PrismBridgeService bridge,
+                                    AgentExplorationTrace explorationTrace, Path initialReplay) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.bridge = Objects.requireNonNull(bridge, "bridge");
+        this.explorationTrace = Objects.requireNonNull(explorationTrace, "explorationTrace");
+        this.initialReplay = initialReplay;
     }
 
     @Override
@@ -60,6 +71,9 @@ public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
                 context.refresh(),
                 context.workspace()::focusView
         ));
+        AgentTracePanel tracePanel = new AgentTracePanel(
+                managed, context.workspace().model(), context.refresh(), explorationTrace, initialReplay);
+        context.workspace().addApplicationTab("agent-trace", "Agent Trace", tracePanel);
         SharedSessionRefreshBinding binding = new SharedSessionRefreshBinding(
                 managed,
                 () -> {
@@ -72,6 +86,7 @@ public final class SharedPrismLiteExtension implements PrismLiteSwingExtension {
             public void windowClosed(WindowEvent event) {
                 binding.close();
                 moleculePanel.close();
+                tracePanel.close();
             }
         });
     }
