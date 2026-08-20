@@ -50,11 +50,15 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(99, tools.size());
+        assertEquals(103, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
         assertTrue(hasTool(tools, "get_artifact_info"));
+        assertTrue(hasTool(tools, "open_mmp_artifact"));
+        assertTrue(hasTool(tools, "list_mmp_artifacts"));
+        assertTrue(hasTool(tools, "describe_mmp_artifact"));
+        assertTrue(hasTool(tools, "recommend_mmp_transformations"));
         assertTrue(hasTool(tools, "get_structurized_tool_guide"));
         assertTrue(hasTool(tools, "search_substructure"));
         assertTrue(hasTool(tools, "compare_structures"));

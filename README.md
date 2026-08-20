@@ -87,3 +87,21 @@ Notes
 - GUI test app notes: `docs/GUI_TEST_APP.md`
 - Review and project notes: `docs/STRUCTURIZED_REVIEW.md`
 - Verified OpenChemLib usage notes: `docs/OPENCHEMLIB_METHODS.md`
+- Accessing existing MMP analytics artifacts: [`docs/mmp_agent_workflow.md`](docs/mmp_agent_workflow.md)
+
+MMP artifact access workflow
+----------------------------
+The stdio MCP server can consume persisted SQLite MMP statistics without modifying them:
+
+1. `open_mmp_artifact` opens any existing regular file read-only and returns a
+   session-scoped handle. `list_mmp_artifacts` and `describe_mmp_artifact` expose
+   identity, universes, endpoint runs, counts, and the resolved mining configuration.
+2. `recommend_mmp_transformations` accepts ordinary SMILES for all-sites searches or
+   atom-mapped SMILES plus `selected_atom_maps` for targeted modes. One endpoint run is
+   primary for ranking; additional runs provide evidence only.
+3. Results are generated compounds backed by observed MMP statistics, not property
+   predictions. Compact/full evidence and managed JSON file output are available.
+
+New artifacts persist the complete resolved mining configuration. Legacy artifacts remain
+browseable; recommendation requires defaults or explicit curated overrides whose hash
+matches the selected endpoint run. Artifact identity is checked again on every operation.

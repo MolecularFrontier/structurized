@@ -20,6 +20,10 @@ public final class MmpAnalyticsPersistenceService {
 
     public MmpEndpointStatsComputationResult persist(MmpAnalyticsComputation computation) {
         Objects.requireNonNull(computation, "computation");
+        if (computation.miningConfig() != null && statsRepository instanceof MmpMiningConfigRepository configs) {
+            configs.saveMiningConfig(MmpAnalyticsHashes.mmpConfigHash(computation.miningConfig().toMiningConfig()),
+                    computation.miningConfig());
+        }
         for (MmpComputedUniverse computed : computation.universes()) {
             universeRepository.saveUniverse(computed.universe(), computed.structuralSubjectIds());
             pairRepository.replaceFragmentationRecords(
