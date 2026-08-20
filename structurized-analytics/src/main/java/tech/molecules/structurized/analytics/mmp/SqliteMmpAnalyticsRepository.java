@@ -4,6 +4,7 @@ import tech.molecules.structurized.mmp.MmpFragmentationRecord;
 import tech.molecules.structurized.mmp.MmpPair;
 import tech.molecules.structurized.mmp.MmpTransformStats;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -25,13 +26,17 @@ import java.util.stream.Collectors;
  * SQLite-backed reference repository for MMP universes, pairs, and endpoint statistics.
  */
 public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository, MmpPairRepository,
-        MmpEndpointStatsRepository, AutoCloseable {
+        MmpEndpointStatsRepository, MmpMiningConfigRepository, AutoCloseable {
     private static final int SQLITE_IN_CHUNK_SIZE = 400;
     private final Connection connection;
 
     public SqliteMmpAnalyticsRepository(Connection connection) {
+        this(connection, true);
+    }
+
+    private SqliteMmpAnalyticsRepository(Connection connection, boolean initializeSchema) {
         this.connection = Objects.requireNonNull(connection, "connection");
-        createSchema();
+        if (initializeSchema) createSchema();
     }
 
     public static SqliteMmpAnalyticsRepository open(Path databasePath) {
@@ -41,6 +46,26 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             return new SqliteMmpAnalyticsRepository(connection);
         } catch (SQLException e) {
             throw new IllegalStateException("failed to open SQLite MMP analytics database", e);
+        }
+    }
+
+
+    /** Opens an existing regular SQLite artifact without creating or modifying any file or schema. */
+    public static SqliteMmpAnalyticsRepository openReadOnly(Path databasePath) {
+        Objects.requireNonNull(databasePath, "databasePath");
+        try {
+            Path real = databasePath.toRealPath();
+            if (!Files.isRegularFile(real)) {
+                throw new IllegalArgumentException(
+                        "MMP artifact must be an existing regular file: " + databasePath);
+            }
+            Connection connection = DriverManager.getConnection("jdbc:sqlite:file:" + real + "?mode=ro");
+            SqliteMmpAnalyticsRepository repository = new SqliteMmpAnalyticsRepository(connection, false);
+            repository.validateReadableSchema();
+            return repository;
+        } catch (java.io.IOException | SQLException e) {
+            throw new IllegalStateException(
+                    "failed to open read-only SQLite MMP analytics artifact " + databasePath, e);
         }
     }
 
@@ -422,6 +447,87 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
     }
 
     @Override
+    public void saveMiningConfig(String configHash, MmpMiningConfigSnapshot config) {
+        Objects.requireNonNull(configHash, "configHash");
+        Objects.requireNonNull(config, "config");
+        runInTransaction(() -> {
+            executeUpdate("""
+                insert or replace into mmp_mining_config
+                (config_hash, max_cuts, single_bonds_only, skip_small_rings, allow_macrocycle_ring_cuts,
+                 macrocycle_min_ring_size, allow_mixed_ring_chain_cut_sets, min_key_heavy_atoms,
+                 min_variable_heavy_atoms, max_variable_heavy_atoms, max_variable_fraction,
+                 max_fragmentation_records, max_pairs_per_key, emit_reverse_transforms,
+                 min_transform_support, no_cut_rule_profile)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, configHash, config.maxCuts(), config.singleBondsOnly(), config.skipSmallRings(),
+                config.allowMacrocycleRingCuts(), config.macrocycleMinRingSize(),
+                config.allowMixedRingChainCutSets(), config.minKeyHeavyAtoms(), config.minVariableHeavyAtoms(),
+                config.maxVariableHeavyAtoms(), config.maxVariableToMolHeavyAtomFraction(),
+                config.maxFragmentationRecordsPerCompound(), config.maxPairsPerKey(),
+                config.emitReverseTransforms(), config.minTransformSupport(), config.noCutRuleProfile());
+        });
+    }
+
+    @Override
+    public Optional<MmpMiningConfigSnapshot> findMiningConfig(String configHash) {
+        if (!hasTable("mmp_mining_config")) return Optional.empty();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select max_cuts, single_bonds_only, skip_small_rings, allow_macrocycle_ring_cuts,
+                       macrocycle_min_ring_size, allow_mixed_ring_chain_cut_sets, min_key_heavy_atoms,
+                       min_variable_heavy_atoms, max_variable_heavy_atoms, max_variable_fraction,
+                       max_fragmentation_records, max_pairs_per_key, emit_reverse_transforms,
+                       min_transform_support, no_cut_rule_profile
+                from mmp_mining_config where config_hash = ?
+                """)) {
+            ps.setString(1, configHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(new MmpMiningConfigSnapshot(
+                        rs.getInt(1), rs.getBoolean(2), rs.getBoolean(3), rs.getBoolean(4),
+                        rs.getInt(5), rs.getBoolean(6), rs.getInt(7), rs.getInt(8), rs.getInt(9),
+                        rs.getDouble(10), rs.getInt(11), rs.getInt(12), rs.getBoolean(13),
+                        rs.getInt(14), rs.getString(15)));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to read MMP mining configuration " + configHash, e);
+        }
+    }
+
+    /** Returns 1 for legacy artifacts and the persisted schema version for newer artifacts. */
+    public int artifactSchemaVersion() {
+        if (!hasTable("mmp_artifact_metadata")) return 1;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "select metadata_value from mmp_artifact_metadata where metadata_key = 'schema_version'");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? Integer.parseInt(rs.getString(1)) : 1;
+        } catch (SQLException | NumberFormatException e) {
+            throw new IllegalStateException("failed to read MMP artifact schema version", e);
+        }
+    }
+
+    private void validateReadableSchema() {
+        for (String table : List.of("mmp_universe", "mmp_fragmentation_record", "mmp_pair",
+                "mmp_endpoint_stats_run", "mmp_endpoint_transform_stats", "mmp_endpoint_example_pair")) {
+            if (!hasTable(table)) {
+                close();
+                throw new IllegalArgumentException("not a readable MMP analytics artifact; missing table " + table);
+            }
+        }
+    }
+
+    private boolean hasTable(String table) {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "select 1 from sqlite_master where type = 'table' and name = ?")) {
+            ps.setString(1, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to inspect SQLite MMP artifact schema", e);
+        }
+    }
+
+    @Override
     public void close() {
         try {
             connection.close();
@@ -432,6 +538,36 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     private void createSchema() {
         runInTransaction(() -> {
+            execute("""
+                    create table if not exists mmp_artifact_metadata (
+                      metadata_key text primary key,
+                      metadata_value text not null
+                    )
+                    """);
+            execute("""
+                    create table if not exists mmp_mining_config (
+                      config_hash text primary key,
+                      max_cuts integer not null,
+                      single_bonds_only integer not null,
+                      skip_small_rings integer not null,
+                      allow_macrocycle_ring_cuts integer not null,
+                      macrocycle_min_ring_size integer not null,
+                      allow_mixed_ring_chain_cut_sets integer not null,
+                      min_key_heavy_atoms integer not null,
+                      min_variable_heavy_atoms integer not null,
+                      max_variable_heavy_atoms integer not null,
+                      max_variable_fraction real not null,
+                      max_fragmentation_records integer not null,
+                      max_pairs_per_key integer not null,
+                      emit_reverse_transforms integer not null,
+                      min_transform_support integer not null,
+                      no_cut_rule_profile text not null
+                    )
+                    """);
+            executeUpdate("""
+                    insert or ignore into mmp_artifact_metadata (metadata_key, metadata_value)
+                    values ('schema_version', '2')
+                    """);
             execute("""
                     create table if not exists mmp_universe (
                       universe_id text primary key,

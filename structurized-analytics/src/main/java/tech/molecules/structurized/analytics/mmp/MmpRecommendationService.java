@@ -129,6 +129,11 @@ public final class MmpRecommendationService {
             runs.put(run.runId(), run);
         }
         MmpEndpointStatsRun primary = runs.get(request.primaryRunId());
+        String requestedConfigHash = MmpAnalyticsHashes.mmpConfigHash(request.miningConfig());
+        if (!primary.mmpConfigHash().equals(requestedConfigHash)) {
+            throw new IllegalArgumentException(
+                    "recommendation mining configuration does not match the selected endpoint runs");
+        }
         for (MmpEndpointStatsRun run : runs.values()) {
             if (!primary.universeId().equals(run.universeId())) {
                 throw new IllegalArgumentException(

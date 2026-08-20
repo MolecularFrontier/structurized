@@ -99,7 +99,8 @@ public final class MmpEndpointStatsCalculator {
                     computedUniverse.pairs(), statsConfigHash, mmpConfigHash, mmpConfig, createdAt, warnings));
         }
         return new MmpAnalyticsComputation(
-                List.of(computedUniverse), endpointStats, endpoints.size(), warnings);
+                List.of(computedUniverse), endpointStats, endpoints.size(), warnings,
+                MmpMiningConfigSnapshot.from(mmpConfig));
     }
 
     private MmpAnalyticsComputation computePerEndpoint(
@@ -133,7 +134,8 @@ public final class MmpEndpointStatsCalculator {
             endpointStats.add(computeEndpointStats(endpoint, computedUniverse.universe(),
                     computedUniverse.pairs(), statsConfigHash, mmpConfigHash, mmpConfig, createdAt, warnings));
         }
-        return new MmpAnalyticsComputation(universes, endpointStats, endpoints.size(), warnings);
+        return new MmpAnalyticsComputation(universes, endpointStats, endpoints.size(), warnings,
+                MmpMiningConfigSnapshot.from(mmpConfig));
     }
 
     private static MmpComputedUniverse computeUniverse(

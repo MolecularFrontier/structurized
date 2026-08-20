@@ -83,6 +83,7 @@ final class McpChemistryTools {
     private final PrismBridgeService prism;
     private final McpArtifactService artifacts;
     private final McpToolOutputSupport output;
+    private final MmpArtifactMcpTools mmpArtifacts;
     private final StructureComparisonMcpTool comparisonTools;
     private final PrismGraphMcpTool graphTools;
     private final ScaffoldSarMcpTool scaffoldSarTools;
@@ -101,6 +102,7 @@ final class McpChemistryTools {
         this.prism = Objects.requireNonNull(prism, "prism");
         this.artifacts = new McpArtifactService(mapper);
         this.output = new McpToolOutputSupport(artifacts);
+        this.mmpArtifacts = new MmpArtifactMcpTools(this.output);
         this.comparisonTools = new StructureComparisonMcpTool(this.repositories, this.prism);
         this.graphTools = new PrismGraphMcpTool(this.prism, this.artifacts, this.output);
         this.scaffoldSarTools = new ScaffoldSarMcpTool(this.prism, this.artifacts, this.output);
@@ -142,6 +144,43 @@ final class McpChemistryTools {
 
     private List<McpToolDefinition> registerTools() {
         List<McpToolDefinition> result = new ArrayList<>();
+        add(result, "open_mmp_artifact",
+                "Opens an existing SQLite MMP analytics artifact read-only and returns a session handle.",
+                schema(required("path"),
+                        prop("path", "string", "Path to an existing SQLite MMP artifact."),
+                        prop("label", "string", "Optional session label.")),
+                mmpArtifacts::open);
+        add(result, "list_mmp_artifacts",
+                "Lists MMP artifacts opened in this MCP session and reports whether each file is unchanged.",
+                schema(), args -> mmpArtifacts.list());
+        add(result, "describe_mmp_artifact",
+                "Lists universes, endpoint runs, counts, and persisted mining configuration for an opened artifact.",
+                schema(required("artifact_id"),
+                        prop("artifact_id", "string", "Handle returned by open_mmp_artifact.")),
+                mmpArtifacts::describe);
+        add(result, "recommend_mmp_transformations",
+                "Generates structures by applying observed MMP transformations. Ranks by one primary endpoint; other endpoints are evidence only.",
+                schema(required("artifact_id", "input_smiles", "primary_run_id", "endpoint_preferences"),
+                        prop("artifact_id", "string", "Handle returned by open_mmp_artifact."),
+                        prop("input_smiles", "string", "SMILES; use atom-map labels when selecting an editable region."),
+                        prop("selection_mode", "string", "editable_region, exact_fragment, attachment_vicinity, or all_sites."),
+                        arrayProp("selected_atom_maps", "integer", "Atom-map labels selecting the editable region."),
+                        arrayProp("endpoint_preferences", "object", "Entries with run_id and direction: higher_is_better, lower_is_better, or neutral."),
+                        prop("primary_run_id", "string", "Run used for candidate ranking."),
+                        prop("max_results", "integer", "Maximum candidates; default 50, hard maximum 200."),
+                        prop("max_application_attempts", "integer", "Safety limit for transform applications."),
+                        prop("detail", "string", "compact or full; full includes example pairs."),
+                        prop("max_cuts", "integer", "Legacy-artifact mining config override."),
+                        prop("min_transform_support", "integer", "Legacy-artifact mining config override."),
+                        prop("max_variable_heavy_atoms", "integer", "Legacy-artifact mining config override."),
+                        prop("max_variable_to_mol_heavy_atom_fraction", "number", "Legacy-artifact mining config override."),
+                        prop("max_fragmentation_records_per_compound", "integer", "Legacy-artifact mining config override."),
+                        prop("max_pairs_per_key", "integer", "Legacy-artifact mining config override."),
+                        prop("output_target", "string", "response or file. Defaults to response."),
+                        prop("output_name", "string", "Optional relative managed-artifact name."),
+                        prop("overwrite", "boolean", "Whether to overwrite a caller-named output."),
+                        prop("format", "string", "Only json is supported.")),
+                mmpArtifacts::recommend);
         add(result, "create_repository", "Creates a lightweight structure repository identity boundary.", schema(
                 prop("repository_id", "string", "Optional unique repository ID."),
                 prop("label", "string", "Human-readable repository label."),

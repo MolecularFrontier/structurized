@@ -113,7 +113,7 @@ class MmpRecommendationServiceTest {
                      SqliteMmpAnalyticsRepository.open(tempDir.resolve("invalid.sqlite"))) {
             repository.saveStatsRun(run("primary", 0), List.of());
             repository.saveStatsRun(new MmpEndpointStatsRun(
-                    "other", "other", "set", "different-universe", "hash", "stats",
+                    "other", "other", "set", "different-universe", MmpAnalyticsHashes.mmpConfigHash(config()), "stats",
                     Instant.parse("2026-08-06T10:00:00Z"), 2, 2, 0, 0, null), List.of());
             MmpRecommendationRequest request = MmpRecommendationRequest.defaults(
                     canonical(parse("CC")), Set.of(), MmpSelectionMode.ALL_SITES,
@@ -124,6 +124,13 @@ class MmpRecommendationServiceTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> new MmpRecommendationService(repository).recommend(request));
+            MmpRecommendationRequest mismatchedConfig = MmpRecommendationRequest.defaults(
+                    canonical(parse("CC")), Set.of(), MmpSelectionMode.ALL_SITES,
+                    List.of(new MmpEndpointPreference(
+                            "primary", MmpOptimizationDirection.NEUTRAL)),
+                    "primary", MmpMiningConfig.defaults());
+            assertThrows(IllegalArgumentException.class,
+                    () -> new MmpRecommendationService(repository).recommend(mismatchedConfig));
             assertThrows(IllegalArgumentException.class,
                     () -> MmpRecommendationRequest.defaults(
                             canonical(parse("CC")), Set.of(), MmpSelectionMode.EDITABLE_REGION,
@@ -135,7 +142,7 @@ class MmpRecommendationServiceTest {
 
     private static MmpEndpointStatsRun run(String id, int statsCount) {
         return new MmpEndpointStatsRun(
-                id, id, "set", "universe", "hash", "stats",
+                id, id, "set", "universe", MmpAnalyticsHashes.mmpConfigHash(config()), "stats",
                 Instant.parse("2026-08-06T10:00:00Z"), 2, 2, 2, statsCount, null);
     }
 

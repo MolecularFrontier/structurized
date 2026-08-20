@@ -7,8 +7,16 @@ public record MmpAnalyticsComputation(
         List<MmpComputedUniverse> universes,
         List<MmpComputedEndpointStats> endpointStats,
         int requestedEndpointCount,
-        List<String> warnings
+        List<String> warnings,
+        MmpMiningConfigSnapshot miningConfig
 ) {
+    public MmpAnalyticsComputation(List<MmpComputedUniverse> universes,
+                                   List<MmpComputedEndpointStats> endpointStats,
+                                   int requestedEndpointCount,
+                                   List<String> warnings) {
+        this(universes, endpointStats, requestedEndpointCount, warnings, null);
+    }
+
     public MmpAnalyticsComputation {
         universes = List.copyOf(universes == null ? List.of() : universes);
         endpointStats = List.copyOf(endpointStats == null ? List.of() : endpointStats);

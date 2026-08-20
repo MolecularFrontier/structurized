@@ -9,10 +9,10 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.stream.Collectors;
 
-final class MmpAnalyticsHashes {
+public final class MmpAnalyticsHashes {
     private MmpAnalyticsHashes() {}
 
-    static String mmpConfigHash(MmpMiningConfig config) {
+    public static String mmpConfigHash(MmpMiningConfig config) {
         String noCutRules = config.noCutBondRules().stream()
                 .map(rule -> rule.getClass().getName())
                 .sorted()
