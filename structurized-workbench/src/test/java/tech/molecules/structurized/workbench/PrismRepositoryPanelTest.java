@@ -1,5 +1,6 @@
 package tech.molecules.structurized.workbench;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tech.molecules.structurized.prism.model.EndpointDataType;
@@ -12,6 +13,7 @@ import tech.molecules.structurized.workbench.model.PrismWorkbenchRepositorySnaps
 import tech.molecules.structurized.workbench.prism.PrismRepositoryPanel;
 
 import javax.swing.SwingUtilities;
+import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
@@ -19,8 +21,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class PrismRepositoryPanelTest {
+
+    @BeforeEach
+    void requireGraphicsEnvironment() {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Swing editor requires a graphics environment");
+    }
 
     @Test
     void loadsMinimalPrismTsvRepository(@TempDir Path tempDir) throws Exception {

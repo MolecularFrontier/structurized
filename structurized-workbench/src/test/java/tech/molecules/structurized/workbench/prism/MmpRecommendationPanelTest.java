@@ -4,6 +4,7 @@ import com.actelion.research.chem.Molecule;
 import com.actelion.research.chem.IDCodeParser;
 import com.actelion.research.chem.SmilesParser;
 import com.actelion.research.chem.StereoMolecule;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsRun;
@@ -18,6 +19,7 @@ import tech.molecules.structurized.mmp.MmpStatsAggregator;
 import tech.molecules.structurized.mmp.MmpTransformStats;
 
 import javax.swing.SwingUtilities;
+import java.awt.GraphicsEnvironment;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashSet;
@@ -29,8 +31,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class MmpRecommendationPanelTest {
+    @BeforeEach
+    void requireGraphicsEnvironment() {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Swing editor requires a graphics environment");
+    }
+
     @Test
     void editorBuildsRequestAndDisplaysGeneratedEvidence(@TempDir Path tempDir) throws Exception {
         StereoMolecule source = parse("Cc1ccccc1");

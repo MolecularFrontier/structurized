@@ -1,5 +1,6 @@
 package tech.molecules.structurized.workbench.prism;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsRun;
@@ -19,6 +20,7 @@ import tech.molecules.structurized.workbench.model.PrismStructureProvider;
 import tech.molecules.structurized.workbench.model.PrismWorkbenchModel;
 
 import javax.swing.SwingUtilities;
+import java.awt.GraphicsEnvironment;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -27,8 +29,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class MmpWorkbenchPanelTest {
+    @BeforeEach
+    void requireGraphicsEnvironment() {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Swing editor requires a graphics environment");
+    }
+
     @Test
     void preflightEnablesRunForMappedNumericEndpoint(@TempDir Path tempDir) throws Exception {
         InMemoryPrismDataset dataset = dataset("assay:ic50:measured", "ASSAY_MEASURED", "ASSAYS");
