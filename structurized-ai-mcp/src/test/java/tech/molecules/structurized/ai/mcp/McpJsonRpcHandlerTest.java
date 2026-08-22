@@ -30,7 +30,7 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
-        assertEquals("0.3.3", response.at("/result/serverInfo/version").asText());
+        assertEquals("0.3.6", response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
     }
 
@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(104, tools.size());
+        assertEquals(95, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -63,11 +63,11 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "search_substructure"));
         assertTrue(hasTool(tools, "compare_structures"));
         assertTrue(hasTool(tools, "cut_bonds"));
-        assertTrue(hasTool(tools, "open_prism_dataset"));
-        assertTrue(hasTool(tools, "reload_prism_dataset"));
-        assertTrue(hasTool(tools, "open_prism_pack"));
+        assertTrue(hasTool(tools, "open_prism_snapshot"));
+        assertTrue(hasTool(tools, "reload_prism_snapshot"));
+        assertTrue(hasTool(tools, "describe_prism_snapshot"));
         assertTrue(hasTool(tools, "list_prism_sessions"));
-        assertTrue(hasTool(tools, "get_prism_session_info"));
+        assertFalse(hasTool(tools, "get_prism_session_info"));
         assertTrue(hasTool(tools, "list_prism_columns"));
         assertTrue(hasTool(tools, "describe_prism_session_for_agent"));
         assertTrue(hasTool(tools, "list_prediction_capabilities"));
@@ -84,7 +84,6 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "run_prism_live_evaluator"));
         assertTrue(hasTool(tools, "list_prism_row_sets"));
         assertTrue(hasTool(tools, "get_prism_row_set_members"));
-        assertTrue(hasTool(tools, "create_prism_row_set_from_subject_set"));
         assertTrue(hasTool(tools, "create_prism_endpoint_row_set"));
         assertTrue(hasTool(tools, "create_prism_column_row_set"));
         assertTrue(hasTool(tools, "combine_prism_row_sets"));
@@ -114,7 +113,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "export_prism_scaffold_projection"));
         assertTrue(hasTool(tools, "summarize_prism_row_set_by_columns"));
         assertTrue(hasTool(tools, "summarize_prism_grouping_by_columns"));
-        assertTrue(hasTool(tools, "materialize_prism_subject_set"));
+        assertTrue(hasTool(tools, "materialize_prism_row_set"));
         assertTrue(hasTool(tools, "create_decomposition_config"));
         assertTrue(hasTool(tools, "evaluate_decomposition"));
         assertTrue(hasTool(tools, "get_decomposition_result"));
@@ -126,8 +125,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "get_cluster"));
         assertTrue(hasTool(tools, "get_cluster_members"));
         assertTrue(hasTool(tools, "get_selection"));
-        assertTrue(hasTool(tools, "create_endpoint_selection"));
-        assertTrue(hasTool(tools, "create_subject_measurement_date_selection"));
+        assertTrue(hasTool(tools, "get_prism_endpoint_results"));
         assertTrue(hasTool(tools, "combine_selections"));
         assertTrue(hasTool(tools, "get_selection_members"));
         assertTrue(hasTool(tools, "summarize_selection_by_endpoint"));
@@ -181,7 +179,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(compact.at("/result/structuredContent/changeGroups/0/removedIdcode").isMissingNode());
 
         String path = mmpDataset().toString().replace("\\", "\\\\");
-        call(handler, request(6, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"compare_prism\"}"));
+        call(handler, request(6, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"compare_prism\"}"));
         JsonNode full = call(handler, request(7, "compare_structures", """
                 {
                   "session_id":"compare_prism",
@@ -201,7 +199,7 @@ class McpJsonRpcHandlerTest {
     void agentCanCreateAndPopulatePrismMoleculeLists() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         String path = prismDataset().toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"molecules\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"molecules\"}"));
 
         JsonNode created = call(handler, request(2, "create_prism_molecule_list", """
                 {"session_id":"molecules","list_id":"ideas","title":"Proposed analogues"}
@@ -233,7 +231,7 @@ class McpJsonRpcHandlerTest {
     void agentCanConfigureAndRunPrismLiveEvaluators() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         String path = prismDataset().toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"live\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"live\"}"));
         JsonNode added = call(handler, request(2, "add_prism_molecules", """
                 {
                   "session_id":"live",
@@ -292,7 +290,7 @@ class McpJsonRpcHandlerTest {
     void agentCanEvaluatePrismPredictions() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         String path = prismDataset().toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"predict\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"predict\"}"));
 
         JsonNode capabilities = call(handler, request(2, "list_prediction_capabilities", "{\"session_id\":\"predict\",\"endpoint_id\":\"pIC50\"}"));
         assertEquals("reference/pic50", capabilities.at("/result/structuredContent/0/capabilityId").asText());
@@ -328,22 +326,23 @@ class McpJsonRpcHandlerTest {
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
 
-        JsonNode opened = call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        JsonNode opened = call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"demo\"}"));
         assertEquals("demo", opened.at("/result/structuredContent/sessionId").asText());
         assertEquals("demo", opened.at("/result/structuredContent/datasetId").asText());
 
         JsonNode sessions = call(handler, request(2, "list_prism_sessions", "{}"));
         assertEquals("demo", sessions.at("/result/structuredContent/0/sessionId").asText());
 
-        JsonNode info = call(handler, request(3, "get_prism_session_info", "{\"session_id\":\"demo\"}"));
+        JsonNode info = call(handler, request(3, "describe_prism_snapshot", "{\"session_id\":\"demo\"}"));
         assertEquals(2, info.at("/result/structuredContent/summary/totalRowCount").asInt());
         assertTrue(info.at("/result/structuredContent/rowSets").size() >= 1);
+        assertTrue(info.at("/result/structuredContent/subjectSets").isMissingNode());
 
-        JsonNode subjectSet = call(handler, request(4, "create_prism_row_set_from_subject_set", """
-                {"session_id":"demo","subject_set_id":"series:A"}
+        JsonNode subjectSet = call(handler, request(4, "get_prism_row_set_members", """
+                {"session_id":"demo","row_set_id":"series:A"}
                 """));
-        assertEquals("series:A", subjectSet.at("/result/structuredContent/rowSetId").asText());
-        assertEquals(2, subjectSet.at("/result/structuredContent/rowCount").asInt());
+        assertEquals("series:A", subjectSet.at("/result/structuredContent/summary/rowSetId").asText());
+        assertEquals(2, subjectSet.at("/result/structuredContent/summary/rowCount").asInt());
 
         JsonNode potent = call(handler, request(5, "create_prism_endpoint_row_set", """
                 {"session_id":"demo","endpoint_id":"pIC50","operator":"gte","value":7.0,"row_set_id":"potent"}
@@ -381,7 +380,7 @@ class McpJsonRpcHandlerTest {
     void canMineAnalyzeInspectAndExportPrismMmpGraphsThroughToolCalls() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         String path = mmpDataset().toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"mmp_demo\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"mmp_demo\"}"));
 
         JsonNode mined = call(handler, request(2, "mine_prism_mmp_graph", """
                 {"session_id":"mmp_demo","row_set_id":"all","structure_column_id":"smiles","value_column_id":"pIC50","graph_id":"mmp_network"}
@@ -532,8 +531,8 @@ class McpJsonRpcHandlerTest {
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
 
-        call(handler, request(20, "open_prism_dataset",
-                "{\"path\":\"" + path + "\",\"dataset_id\":\"analysis_demo\"}"));
+        call(handler, request(20, "open_prism_snapshot",
+                "{\"path\":\"" + path + "\",\"session_id\":\"analysis_demo\"}"));
 
         JsonNode scope = call(handler, request(21, "create_prism_column_row_set", """
                 {
@@ -653,7 +652,7 @@ class McpJsonRpcHandlerTest {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         String path = pack.toString().replace("\\", "\\\\");
 
-        JsonNode opened = call(handler, request(10, "open_prism_pack", """
+        JsonNode opened = call(handler, request(10, "open_prism_snapshot", """
                 {"path":"%s","session_id":"example_pack","label":"Example pack"}
                 """.formatted(path)));
         assertEquals("example_pack", opened.at("/result/structuredContent/sessionId").asText());
@@ -741,7 +740,7 @@ class McpJsonRpcHandlerTest {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"demo\"}"));
         call(handler, request(2, "register_structure", """
                 {"smiles":"c1ccncc1","structure_id":"pyridine_a","fields":{"prism.subject_id":"CMP-001"}}
                 """));
@@ -951,7 +950,7 @@ class McpJsonRpcHandlerTest {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"demo\"}"));
         call(handler, request(2, "register_structure", """
                 {"smiles":"CCCO","structure_id":"butanol_a","fields":{"prism.subject_id":"CMP-001"}}
                 """));
@@ -1002,7 +1001,7 @@ class McpJsonRpcHandlerTest {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         Path dataset = mmpDataset();
         String path = dataset.toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"sar_demo\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"sar_demo\"}"));
 
         JsonNode discovery = call(handler, request(2, "discover_prism_scaffolds", """
                 {"session_id":"sar_demo","row_set_id":"all","discovery_id":"benzene_discovery","min_scaffold_heavy_atoms":6,"min_support":2,"limit":5}
@@ -1066,7 +1065,7 @@ class McpJsonRpcHandlerTest {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
-        call(handler, request(1, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\"}"));
+        call(handler, request(1, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"demo\"}"));
         call(handler, request(2, "register_structure", """
                 {"smiles":"CCCO","structure_id":"butanol_a","label":"Butanol A","fields":{"prism.subject_id":"CMP-001","batch":"A1"}}
                 """));
@@ -1164,28 +1163,32 @@ class McpJsonRpcHandlerTest {
     }
 
     @Test
-    void canOpenPrismMaterializeSearchAndFetchEndpointValues() throws Exception {
+    void canOpenSnapshotMaterializeRowSetSearchAndFetchEndpointResults() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
         Path dataset = prismDataset();
         String path = dataset.toString().replace("\\", "\\\\");
 
-        JsonNode open = call(handler, request(10, "open_prism_dataset", "{\"path\":\"" + path + "\",\"dataset_id\":\"demo\",\"label\":\"Demo\"}"));
+        JsonNode open = call(handler, request(10, "open_prism_snapshot", "{\"path\":\"" + path + "\",\"session_id\":\"demo\",\"label\":\"Demo\"}"));
         assertEquals("demo", open.at("/result/structuredContent/datasetId").asText());
         assertEquals(2, open.at("/result/structuredContent/structureSubjectCount").asInt());
 
-        JsonNode sets = call(handler, request(11, "list_prism_subject_sets", "{\"dataset_id\":\"demo\"}"));
-        assertTrue(sets.at("/result/structuredContent").toString().contains("series:Kinase:A"));
+        JsonNode description = call(handler, request(11, "describe_prism_snapshot", "{\"session_id\":\"demo\"}"));
+        assertEquals("FULL", description.at("/result/structuredContent/capabilities/endpointResultFidelity").asText());
 
-        JsonNode materialized = call(handler, request(12, "materialize_prism_subject_set", "{\"dataset_id\":\"demo\",\"subject_set_id\":\"series:Kinase:A\"}"));
+        JsonNode materialized = call(handler, request(12, "materialize_prism_row_set", "{\"session_id\":\"demo\",\"row_set_id\":\"series:Kinase:A\"}"));
         String repositoryId = materialized.at("/result/structuredContent/repositoryId").asText();
         assertEquals("prism:demo:series:Kinase:A", repositoryId);
+        assertEquals("series:Kinase:A", materialized.at("/result/structuredContent/rowSetId").asText());
+        assertEquals(2, materialized.at("/result/structuredContent/rowsSeen").asInt());
         assertEquals(2, materialized.at("/result/structuredContent/structuresImported").asInt());
 
         JsonNode search = call(handler, request(13, "search_substructure", "{\"query\":\"c1ccncc1\",\"repository_ids\":[\"" + repositoryId + "\"],\"output_mode\":\"ids\",\"create_selection\":true,\"selection_id\":\"pyridines\"}"));
         assertEquals("CMP-001", search.at("/result/structuredContent/matches/0/structureId").asText());
         assertEquals("pyridines", search.at("/result/structuredContent/selection/selectionId").asText());
 
-        JsonNode values = call(handler, request(14, "get_prism_endpoint_values", "{\"dataset_id\":\"demo\",\"subject_ids\":[\"CMP-001\"],\"endpoint_ids\":[\"pIC50\"]}"));
+        JsonNode values = call(handler, request(14, "get_prism_endpoint_results", "{\"session_id\":\"demo\",\"row_ids\":[\"CMP-001\"],\"endpoint_ids\":[\"pIC50\"]}"));
+        assertEquals("CMP-001", values.at("/result/structuredContent/0/rowId").asText());
+        assertTrue(values.at("/result/structuredContent/0/subjectId").isMissingNode());
         assertEquals("pIC50", values.at("/result/structuredContent/0/endpointId").asText());
         assertEquals(7.2, values.at("/result/structuredContent/0/result/mean").asDouble());
 
@@ -1198,46 +1201,6 @@ class McpJsonRpcHandlerTest {
         Path selectionArtifact = Path.of(selectionMembers.at("/result/structuredContent/artifact/path").asText());
         assertTrue(Files.exists(selectionArtifact));
         assertEquals("CMP-001", mapper.readTree(selectionArtifact.toFile()).at("/members/0/structureId").asText());
-
-        JsonNode potent = call(handler, request(17, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0,\"selection_id\":\"potent\"}"));
-        assertEquals("potent", potent.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, potent.at("/result/structuredContent/summary/memberCount").asInt());
-        assertEquals("CMP-001", potent.at("/result/structuredContent/examples/0/structureId").asText());
-
-        JsonNode potentPyridines = call(handler, request(18, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"base_selection_id\":\"pyridines\",\"endpoint_id\":\"pIC50\",\"operator\":\"gt\",\"value\":7.0,\"selection_id\":\"potent_pyridines\"}"));
-        assertEquals("potent_pyridines", potentPyridines.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, potentPyridines.at("/result/structuredContent/summary/memberCount").asInt());
-
-        JsonNode intersection = call(handler, request(19, "combine_selections", "{\"operation\":\"intersect\",\"selection_ids\":[\"potent\",\"pyridines\"],\"selection_id\":\"potent_pyridine_intersection\"}"));
-        assertEquals("potent_pyridine_intersection", intersection.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, intersection.at("/result/structuredContent/summary/memberCount").asInt());
-
-        JsonNode missingScope = call(handler, request(20, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0}"));
-        assertTrue(missingScope.at("/result/isError").asBoolean());
-        assertEquals("invalid_endpoint_selection_scope", missingScope.at("/result/structuredContent/code").asText());
-
-        JsonNode repositoryMismatch = call(handler, request(21, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"other\",\"base_selection_id\":\"pyridines\",\"endpoint_id\":\"pIC50\",\"operator\":\"gte\",\"value\":7.0}"));
-        assertTrue(repositoryMismatch.at("/result/isError").asBoolean());
-        assertEquals("selection_repository_mismatch", repositoryMismatch.at("/result/structuredContent/code").asText());
-
-        JsonNode badOperator = call(handler, request(22, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"operator\":\"approximately\",\"value\":7.0}"));
-        assertTrue(badOperator.at("/result/isError").asBoolean());
-        assertEquals("invalid_endpoint_filter_operator", badOperator.at("/result/structuredContent/code").asText());
-
-        JsonNode recentEndpoint = call(handler, request(25, "create_endpoint_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_id\":\"pIC50\",\"measurement_date_field\":\"last\",\"measured_after\":\"2026-06-30\",\"selection_id\":\"recent_pic50\"}"));
-        assertEquals("recent_pic50", recentEndpoint.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, recentEndpoint.at("/result/structuredContent/summary/memberCount").asInt());
-        assertEquals("CMP-002", recentEndpoint.at("/result/structuredContent/examples/0/structureId").asText());
-
-        JsonNode recentSubjectFirst = call(handler, request(26, "create_subject_measurement_date_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"subject_date_field\":\"first\",\"measured_after\":\"2026-06-01\",\"selection_id\":\"new_subjects\"}"));
-        assertEquals("new_subjects", recentSubjectFirst.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, recentSubjectFirst.at("/result/structuredContent/summary/memberCount").asInt());
-        assertEquals("CMP-002", recentSubjectFirst.at("/result/structuredContent/examples/0/structureId").asText());
-
-        JsonNode oldPic50SubjectLast = call(handler, request(27, "create_subject_measurement_date_selection", "{\"dataset_id\":\"demo\",\"repository_id\":\"" + repositoryId + "\",\"endpoint_ids\":[\"pIC50\"],\"subject_date_field\":\"last\",\"measured_before\":\"2026-02-01\",\"selection_id\":\"old_pic50_subjects\"}"));
-        assertEquals("old_pic50_subjects", oldPic50SubjectLast.at("/result/structuredContent/summary/selectionId").asText());
-        assertEquals(1, oldPic50SubjectLast.at("/result/structuredContent/summary/memberCount").asInt());
-        assertEquals("CMP-001", oldPic50SubjectLast.at("/result/structuredContent/examples/0/structureId").asText());
 
         call(handler, request(23, "cluster_structures", "{\"clustering_id\":\"prism_clusters\",\"repository_id\":\"" + repositoryId + "\",\"threshold\":0.0}"));
         JsonNode clusterStats = call(handler, request(24, "summarize_clusters_by_endpoint", "{\"clustering_id\":\"prism_clusters\",\"dataset_id\":\"demo\",\"endpoint_id\":\"pIC50\",\"output_target\":\"file\",\"output_name\":\"summaries/clusters.json\"}"));

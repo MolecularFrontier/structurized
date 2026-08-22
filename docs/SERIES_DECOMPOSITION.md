@@ -193,29 +193,30 @@ evaluate_decomposition({
 })
 ```
 
-For scoped analysis, use server-side selections instead of passing raw structure IDs. Selections can come from structural searches, cluster-member drill-downs, endpoint filters, or combinations of existing selections:
+For scoped analysis, define endpoint scopes as snapshot-native row sets. Materialize
+only the selected row set when a repository-only operation such as decomposition
+needs it, then create server-side selections from structural searches:
 
 ```json
-search_substructure({
-  "query": "CCO",
-  "repository_ids": ["session"],
-  "output_mode": "ids",
-  "create_selection": true,
-  "selection_id": "alcohol_hits"
-})
-
-create_endpoint_selection({
-  "dataset_id": "project1",
-  "repository_id": "session",
+create_prism_endpoint_row_set({
+  "session_id": "project1",
   "endpoint_id": "primary_pIC50",
   "operator": "gte",
   "value": 7.0,
-  "selection_id": "potent_primary"
+  "row_set_id": "potent_primary"
 })
 
-combine_selections({
-  "operation": "intersect",
-  "selection_ids": ["alcohol_hits", "potent_primary"],
+materialize_prism_row_set({
+  "session_id": "project1",
+  "row_set_id": "potent_primary",
+  "repository_id": "potent_primary"
+})
+
+search_substructure({
+  "query": "CCO",
+  "repository_ids": ["potent_primary"],
+  "output_mode": "ids",
+  "create_selection": true,
   "selection_id": "potent_alcohol_hits"
 })
 
@@ -228,9 +229,11 @@ evaluate_decomposition({
 
 Useful follow-up tools:
 
-- `create_endpoint_selection`: create a reusable selection from a numeric PRISM endpoint mean filter
-  using `gt`, `gte`, `lt`, `lte`, or `eq`; it can scan a materialized repository or filter an
-  existing `base_selection_id`.
+- `create_prism_endpoint_row_set`: create a reusable snapshot row set from a
+  numeric endpoint filter using `gt`, `gte`, `lt`, `lte`, or `eq`, optionally
+  with measurement-date bounds.
+- `materialize_prism_row_set`: copy a chosen row set into a chemistry repository
+  only for tools that require that representation.
 - `combine_selections`: create a new selection by `union`/`merge`, `intersect`, or `subtract` over
   existing selection handles.
 - `evaluate_decomposition`: evaluate a full repository, explicit `structure_ids`, or a server-side

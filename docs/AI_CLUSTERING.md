@@ -77,16 +77,16 @@ cluster_structures({
 Prism-backed example:
 
 ```json
-open_prism_dataset({
+open_prism_snapshot({
   "path": "/path/to/prism-tsv",
-  "dataset_id": "demo"
+  "session_id": "demo"
 })
 ```
 
 ```json
-materialize_prism_subject_set({
-  "dataset_id": "demo",
-  "subject_set_id": "series:Kinase:A"
+materialize_prism_row_set({
+  "session_id": "demo",
+  "row_set_id": "series:Kinase:A"
 })
 ```
 

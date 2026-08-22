@@ -51,7 +51,7 @@ final class McpArtifactService {
             ArtifactRecord record = new ArtifactRecord(
                     artifactId,
                     target.toAbsolutePath().normalize().toString(),
-                    baseDirectory.relativize(target).toString(),
+                    portableRelativePath(target),
                     "json",
                     "application/json",
                     byteSize,
@@ -86,7 +86,7 @@ final class McpArtifactService {
             ArtifactRecord record = new ArtifactRecord(
                     artifactId,
                     target.toAbsolutePath().normalize().toString(),
-                    baseDirectory.relativize(target).toString(),
+                    portableRelativePath(target),
                     normalizedFormat,
                     contentType == null || contentType.isBlank() ? "text/plain" : contentType,
                     byteSize,
@@ -115,6 +115,10 @@ final class McpArtifactService {
 
     Path baseDirectory() {
         return baseDirectory;
+    }
+
+    private String portableRelativePath(Path target) {
+        return baseDirectory.relativize(target).toString().replace('\\', '/');
     }
 
     private Path relativePath(String sourceTool, String outputName, String format) {

@@ -26,6 +26,8 @@ import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prism.engine.TextPatternFilter;
+import tech.molecules.structurized.prism.engine.snapshot.PrismPackSnapshotDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
 import tech.molecules.structurized.prism.engine.live.PrismLiveBinding;
 import tech.molecules.structurized.prism.engine.live.PrismLiveEvaluation;
 import tech.molecules.structurized.prism.engine.live.PrismLiveExecutionMode;
@@ -38,6 +40,8 @@ import tech.molecules.structurized.prism.model.CategoryDefinition;
 import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.model.NumericEndpointMeta;
+import tech.molecules.structurized.prism.pack.PrismPackReader;
+import tech.molecules.structurized.prism.pack.PrismPack;
 import tech.molecules.structurized.prism.provider.SubjectRecord;
 import tech.molecules.structurized.prism.provider.SubjectSet;
 import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
@@ -125,15 +129,14 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         try {
-            InMemoryPrismDataset dataset = PrismTsvSnapshotLoader.isSnapshot(sourcePath)
-                    ? PrismTsvSnapshotLoader.load(sourcePath).dataset()
-                    : PrismTsvDatasetLoader.load(sourcePath);
-            PrismSession workspace = PrismSessionImporter.toSession(dataset, sourcePath);
+            PrismSnapshotDataset snapshot = loadCanonicalSnapshot(sourcePath);
+            PrismSession workspace = PrismSession.from(snapshot);
             ensureAllRowSet(workspace);
             String label = request.label() == null || request.label().isBlank() ? sessionId : request.label().trim();
-            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, dataset, workspace);
+            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, snapshot,
+                    () -> loadCanonicalSnapshot(sourcePath), workspace);
             return datasetSummary(managed);
-        } catch (IOException | RuntimeException e) {
+        } catch (RuntimeException e) {
             throw new ChemOperationException("invalid_prism_dataset", "Could not load Prism dataset from " + sourcePath + ".", e);
         }
     }
@@ -141,7 +144,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     @Override
     public synchronized PrismDatasetSummary reloadDataset(String sessionId) {
         ManagedPrismSession existing = session(sessionId);
-        if (existing.dataContext().isEmpty()) {
+        if (existing.snapshotReloader().isEmpty()) {
             throw new ChemOperationException(
                     "prism_dataset_reload_unavailable",
                     "Prism session " + existing.sessionId() + " was opened from a PrismPack rather than a TSV dataset."
@@ -149,15 +152,13 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         }
         Path sourcePath = existing.sourcePath().toAbsolutePath().normalize();
         try {
-            InMemoryPrismDataset dataset = PrismTsvSnapshotLoader.isSnapshot(sourcePath)
-                    ? PrismTsvSnapshotLoader.load(sourcePath).dataset()
-                    : PrismTsvDatasetLoader.load(sourcePath);
-            PrismSession workspace = PrismSessionImporter.toSession(dataset, sourcePath);
+            PrismSnapshotDataset snapshot = existing.snapshotReloader().orElseThrow().get();
+            PrismSession workspace = PrismSession.from(snapshot);
             ensureAllRowSet(workspace);
             ManagedPrismSession replacement = sessionRegistry.replace(
-                    existing.sessionId(), existing.label(), sourcePath, dataset, workspace);
+                    existing.sessionId(), existing.label(), sourcePath, snapshot, existing.snapshotReloader().orElseThrow(), workspace);
             return datasetSummary(replacement);
-        } catch (IOException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             throw new ChemOperationException(
                     "invalid_prism_dataset",
                     "Could not reload Prism dataset from " + sourcePath + ".",
@@ -180,10 +181,12 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         try {
-            PrismSession workspace = PrismSession.open(sourcePath);
+            PrismPack pack = PrismPackReader.read(sourcePath);
+            PrismSnapshotDataset snapshot = PrismPackSnapshotDataset.from(pack);
+            PrismSession workspace = PrismSession.from(pack);
             ensureAllRowSet(workspace);
             String label = request.label() == null || request.label().isBlank() ? sourcePath.getFileName().toString() : request.label().trim();
-            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, null, workspace);
+            ManagedPrismSession managed = sessionRegistry.register(sessionId, label, sourcePath, snapshot, null, workspace);
             return sessionSummary(managed);
         } catch (IOException | RuntimeException e) {
             throw new ChemOperationException("invalid_prism_pack", "Could not open PrismPack from " + sourcePath + ".", e);
@@ -204,6 +207,14 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     public synchronized PrismSessionInfo getSessionInfo(String sessionId) {
         ManagedPrismSession session = session(sessionId);
         return new PrismSessionInfo(sessionSummary(session), subjectSets(session), endpoints(session), rowSetSummaries(session));
+    }
+
+    @Override
+    public synchronized PrismSnapshotDescription describeSnapshot(String sessionId) {
+        ManagedPrismSession managed = session(sessionId);
+        return new PrismSnapshotDescription(sessionSummary(managed), endpoints(managed), rowSetSummaries(managed),
+                managed.snapshot().capabilities(),
+                managed.snapshot().origin().orElse(null));
     }
 
     @Override
@@ -1179,9 +1190,8 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     public synchronized PrismRowSetSummary createEndpointRowSet(CreatePrismEndpointRowSetRequest request) {
         Objects.requireNonNull(request, "request");
         ManagedPrismSession session = session(request.sessionId());
-        InMemoryPrismDataset dataContext = dataContext(session);
         String endpointId = normalizeId(request.endpointId(), "endpointId");
-        if (dataContext.findEndpointDefinition(endpointId).isEmpty()) {
+        if (session.snapshot().endpoints().stream().noneMatch(endpoint -> endpoint.id().equals(endpointId))) {
             throw new ChemOperationException("prism_endpoint_not_found", "Prism endpoint " + endpointId + " does not exist.");
         }
         boolean hasNumeric = request.operator() != null || request.value() != null;
@@ -1198,20 +1208,18 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         }
         String operator = hasNumeric ? normalizeEndpointFilterOperator(request.operator()) : null;
         LinkedHashSet<String> rowIds = new LinkedHashSet<>();
-        for (EndpointValueRecord value : dataContext.getEndpointValues()) {
-            if (!endpointId.equals(value.getEndpointId())) {
-                continue;
-            }
-            EndpointResult result = value.getResult();
+        for (int row = 0; row < session.workspace().totalRowCount(); row++) {
+            String rowId = session.workspace().rowIdForPhysicalRow(row);
+            EndpointResult result = session.snapshot().endpointCell(rowId, endpointId)
+                    .flatMap(tech.molecules.structurized.prism.engine.snapshot.PrismEndpointCell::result).orElse(null);
+            if (result == null) continue;
             if (hasNumeric && !numericEndpointFilterMatches(result, operator, request.value())) {
                 continue;
             }
             if (!dateFilter.matches(result)) {
                 continue;
             }
-            if (session.workspace().physicalRowForRowId(value.getSubjectId()).isPresent()) {
-                rowIds.add(value.getSubjectId());
-            }
+            rowIds.add(rowId);
         }
         String rowSetId = request.rowSetId() == null || request.rowSetId().isBlank()
                 ? generatedRowSetId(session, "endpoint_filter")
@@ -1490,17 +1498,16 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         }
         List<PrismEndpointValue> result = new ArrayList<>();
         for (String subjectId : subjectIds) {
-            String normalizedSubjectId = normalizeId(subjectId, "subjectId");
-            if (dataContext(loaded).findSubjectRecord(normalizedSubjectId).isEmpty()) {
-                throw new ChemOperationException("prism_subject_not_found", "Prism subject " + normalizedSubjectId + " does not exist.");
-            }
+            String normalizedSubjectId = normalizeId(subjectId, "rowId");
+            if (loaded.workspace().physicalRowForRowId(normalizedSubjectId).isEmpty())
+                throw new ChemOperationException("prism_row_not_found", "Prism row " + normalizedSubjectId + " does not exist.");
             for (String endpointId : endpointIds) {
                 String normalizedEndpointId = normalizeId(endpointId, "endpointId");
-                if (dataContext(loaded).findEndpointDefinition(normalizedEndpointId).isEmpty()) {
+                if (loaded.snapshot().endpoints().stream().noneMatch(endpoint -> endpoint.id().equals(normalizedEndpointId))) {
                     throw new ChemOperationException("prism_endpoint_not_found", "Prism endpoint " + normalizedEndpointId + " does not exist.");
                 }
-                dataContext(loaded).findEndpointValue(normalizedSubjectId, normalizedEndpointId)
-                        .map(value -> new PrismEndpointValue(value.getSubjectId(), value.getEndpointId(), value.getResult()))
+                loaded.snapshot().endpointCell(normalizedSubjectId, normalizedEndpointId)
+                        .flatMap(cell -> cell.result().map(value -> new PrismEndpointValue(cell.rowId(), cell.endpointId(), value)))
                         .ifPresent(result::add);
             }
         }
@@ -1512,10 +1519,16 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         Objects.requireNonNull(request, "request");
         ManagedPrismSession loaded = session(request.datasetId());
         String subjectSetId = request.subjectSetId() == null || request.subjectSetId().isBlank() ? null : request.subjectSetId().trim();
-        if (subjectSetId != null && dataContext(loaded).findSubjectSet(subjectSetId).isEmpty()) {
-            throw new ChemOperationException("prism_subject_set_not_found", "Prism subject set " + subjectSetId + " does not exist.");
+        List<String> rowIds;
+        if (subjectSetId == null) {
+            ArrayList<String> all = new ArrayList<>();
+            for (int row = 0; row < loaded.workspace().totalRowCount(); row++) all.add(loaded.workspace().rowIdForPhysicalRow(row));
+            rowIds = List.copyOf(all);
+        } else {
+            PrismRowSet rowSet = loaded.workspace().rowSets().stream().filter(candidate -> candidate.id().equals(subjectSetId)).findFirst()
+                    .orElseThrow(() -> new ChemOperationException("prism_row_set_not_found", "Prism row set " + subjectSetId + " does not exist."));
+            rowIds = List.copyOf(rowSet.rowIds());
         }
-        List<SubjectRecord> subjects = subjects(loaded, subjectSetId);
         String repositoryId = request.repositoryId() == null || request.repositoryId().isBlank()
                 ? defaultRepositoryId(loaded.sessionId(), subjectSetId)
                 : request.repositoryId().trim();
@@ -1529,24 +1542,26 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         int invalidSmiles = 0;
         int structuresImported = 0;
         List<PrismSkippedSubject> skipped = new ArrayList<>();
-        for (SubjectRecord subject : subjects) {
-            if (subject.getSmiles() == null || subject.getSmiles().isBlank()) {
+        for (String rowId : rowIds) {
+            int physicalRow = loaded.workspace().physicalRowForRowId(rowId).orElseThrow();
+            String smiles = structureValue(loaded, physicalRow);
+            if (smiles == null || smiles.isBlank()) {
                 missingSmiles++;
-                skipped.add(new PrismSkippedSubject(subject.getSubjectId(), "missing_smiles", "Subject has no SMILES."));
+                skipped.add(new PrismSkippedSubject(rowId, "missing_smiles", "Row has no structure."));
                 continue;
             }
             try {
                 repositories.registerStructure(new RegisterStructureRequest(
-                        subject.getSmiles(),
+                        smiles,
                         repositoryId,
-                        subject.getSubjectId(),
-                        subject.getSubjectId(),
-                        subjectFields(loaded, subjectSetId, subject)
+                        rowId,
+                        rowId,
+                        materializedRowFields(loaded, subjectSetId, rowId, physicalRow)
                 ));
                 structuresImported++;
             } catch (RuntimeException e) {
                 invalidSmiles++;
-                skipped.add(new PrismSkippedSubject(subject.getSubjectId(), "invalid_smiles", e.getMessage()));
+                skipped.add(new PrismSkippedSubject(rowId, "invalid_smiles", e.getMessage()));
             }
         }
         materializationsByRepositoryId.put(repositoryId, new MaterializationMapping(loaded.sessionId(), subjectSetId));
@@ -1554,7 +1569,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 loaded.sessionId(),
                 subjectSetId,
                 repositoryId,
-                subjects.size(),
+                rowIds.size(),
                 structuresImported,
                 missingSmiles,
                 invalidSmiles,
@@ -1613,12 +1628,10 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     }
 
     private List<PrismEndpointSummary> endpoints(ManagedPrismSession loaded) {
-        InMemoryPrismDataset dataContext = loaded.dataContext().orElse(null);
-        if (dataContext != null) {
-            return dataContext.getEndpointDefinitions().stream()
-                    .map(this::endpointSummary)
-                    .toList();
-        }
+        if (!loaded.snapshot().endpoints().isEmpty()) return loaded.snapshot().endpoints().stream()
+                .map(endpoint -> endpoint.definition().map(this::endpointSummary)
+                        .orElseGet(() -> endpointSummary(loaded.workspace().table().column(endpoint.columnId()))))
+                .toList();
         return loaded.workspace().table().columns().stream()
                 .filter(column -> column.schema().endpointId() != null || "endpoint_value".equals(column.schema().semanticType()))
                 .map(column -> endpointSummary(column))
@@ -2070,6 +2083,14 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         return Map.copyOf(fields);
     }
 
+    private Map<String, String> materializedRowFields(ManagedPrismSession session, String rowSetId,
+                                                      String rowId, int physicalRow) {
+        LinkedHashMap<String, String> fields = new LinkedHashMap<>(rowFields(session, physicalRow));
+        session.dataContext().flatMap(dataset -> dataset.findSubjectRecord(rowId))
+                .ifPresent(subject -> fields.putAll(subjectFields(session, rowSetId, subject)));
+        return Map.copyOf(fields);
+    }
+
     private List<SubjectRecord> subjects(ManagedPrismSession loaded, String subjectSetId) {
         InMemoryPrismDataset dataContext = dataContext(loaded);
         if (subjectSetId == null || subjectSetId.isBlank()) {
@@ -2132,6 +2153,17 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     private InMemoryPrismDataset dataContext(ManagedPrismSession session) {
         return session.requireDataContext();
+    }
+
+    private static PrismSnapshotDataset loadCanonicalSnapshot(Path sourcePath) {
+        try {
+            InMemoryPrismDataset dataset = PrismTsvSnapshotLoader.isSnapshot(sourcePath)
+                    ? PrismTsvSnapshotLoader.load(sourcePath).dataset()
+                    : PrismTsvDatasetLoader.load(sourcePath);
+            return PrismSessionImporter.toSnapshot(dataset, sourcePath, true);
+        } catch (IOException | RuntimeException error) {
+            throw new ChemOperationException("invalid_prism_snapshot", "Could not load Prism snapshot from " + sourcePath + ".", error);
+        }
     }
 
     private static void ensureAllRowSet(PrismSession workspace) {

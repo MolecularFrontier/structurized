@@ -10,6 +10,7 @@ import tech.molecules.structurized.prism.engine.PrismWorkspaceExecutor;
 import tech.molecules.structurized.prism.engine.live.PrismLiveContext;
 import tech.molecules.structurized.prism.engine.ocl.OclLiveEvaluationSupport;
 import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -22,30 +23,34 @@ public final class ManagedPrismSession {
     private final String sessionId;
     private final String label;
     private final Path sourcePath;
-    private final InMemoryPrismDataset dataContext;
+    private final PrismSnapshotDataset snapshot;
+    private final Supplier<PrismSnapshotDataset> snapshotReloader;
     private final PrismWorkspace prismWorkspace;
     private final Instant openedAt;
 
     public ManagedPrismSession(String sessionId,
                                String label,
                                Path sourcePath,
-                               InMemoryPrismDataset dataContext,
+                               PrismSnapshotDataset snapshot,
+                               Supplier<PrismSnapshotDataset> snapshotReloader,
                                PrismSession workspace,
                                Instant openedAt) {
-        this(sessionId, label, sourcePath, dataContext, workspace, openedAt, ManagedPrismSessionExecutor.direct());
+        this(sessionId, label, sourcePath, snapshot, snapshotReloader, workspace, openedAt, ManagedPrismSessionExecutor.direct());
     }
 
     public ManagedPrismSession(String sessionId,
                                String label,
                                Path sourcePath,
-                               InMemoryPrismDataset dataContext,
+                               PrismSnapshotDataset snapshot,
+                               Supplier<PrismSnapshotDataset> snapshotReloader,
                                PrismSession workspace,
                                Instant openedAt,
                                ManagedPrismSessionExecutor executor) {
         this.sessionId = requireText(sessionId, "sessionId");
         this.label = label == null || label.isBlank() ? this.sessionId : label.trim();
         this.sourcePath = Objects.requireNonNull(sourcePath, "sourcePath");
-        this.dataContext = dataContext;
+        this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+        this.snapshotReloader = snapshotReloader;
         this.openedAt = openedAt == null ? Instant.now() : openedAt;
         ManagedPrismSessionExecutor managedExecutor = Objects.requireNonNull(executor, "executor");
         PrismWorkspaceExecutor workspaceExecutor = new PrismWorkspaceExecutor() {
@@ -71,18 +76,23 @@ public final class ManagedPrismSession {
         return sourcePath;
     }
 
+    public PrismSnapshotDataset snapshot() {
+        return snapshot;
+    }
+
+    public Optional<Supplier<PrismSnapshotDataset>> snapshotReloader() { return Optional.ofNullable(snapshotReloader); }
+
+    /** Deprecated compatibility path; MCP analysis uses {@link #snapshot()}. */
     public Optional<InMemoryPrismDataset> dataContext() {
-        return Optional.ofNullable(dataContext);
+        return snapshot instanceof CanonicalPrismSnapshotDataset canonical
+                ? Optional.of(canonical.sourceDataset()) : Optional.empty();
     }
 
     public InMemoryPrismDataset requireDataContext() {
-        if (dataContext == null) {
-            throw new tech.molecules.structurized.ai.model.ChemOperationException(
+        return dataContext().orElseThrow(() -> new tech.molecules.structurized.ai.model.ChemOperationException(
                     "prism_data_context_unavailable",
-                    "This Prism session was opened from a PrismPack and does not have canonical PRISM TSV endpoint records."
-            );
-        }
-        return dataContext;
+                    "This deprecated operation requires canonical TSV source records; use snapshot row and endpoint-result APIs instead."
+            ));
     }
 
     public PrismSession workspace() {

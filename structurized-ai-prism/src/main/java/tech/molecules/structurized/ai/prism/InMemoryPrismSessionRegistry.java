@@ -3,6 +3,7 @@ package tech.molecules.structurized.ai.prism;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
 
 import java.nio.file.Path;
 import java.time.Instant;
@@ -14,6 +15,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public final class InMemoryPrismSessionRegistry implements PrismSessionRegistry {
     private final ManagedPrismSessionExecutor executor;
@@ -33,7 +35,8 @@ public final class InMemoryPrismSessionRegistry implements PrismSessionRegistry 
     public synchronized ManagedPrismSession register(String sessionId,
                                                      String label,
                                                      Path sourcePath,
-                                                     InMemoryPrismDataset dataContext,
+                                                     PrismSnapshotDataset snapshot,
+                                                     Supplier<PrismSnapshotDataset> snapshotReloader,
                                                      PrismSession workspace) {
         Objects.requireNonNull(workspace, "workspace");
         Optional<ManagedPrismSession> existingWorkspace = findByWorkspace(workspace);
@@ -44,29 +47,47 @@ public final class InMemoryPrismSessionRegistry implements PrismSessionRegistry 
             throw new ChemOperationException("duplicate_prism_session_id", "Prism session " + sessionId + " already exists.");
         }
         ManagedPrismSession managed = new ManagedPrismSession(
-                sessionId, label, sourcePath, dataContext, workspace, Instant.now(), executor);
+                sessionId, label, sourcePath, snapshot, snapshotReloader, workspace, Instant.now(), executor);
         sessionSubscriptions.put(sessionId, managed.subscribe(this::publish));
         sessions.put(sessionId, managed);
         return managed;
+    }
+
+    /** Source-compatible adapter for hosts compiled against the pre-snapshot registry API. */
+    public synchronized ManagedPrismSession register(String sessionId, String label, Path sourcePath,
+                                                     InMemoryPrismDataset dataContext, PrismSession workspace) {
+        PrismSnapshotDataset snapshot = dataContext == null
+                ? new WorkspacePrismSnapshotDataset(workspace)
+                : PrismSessionImporter.toSnapshot(dataContext, sourcePath, true);
+        return register(sessionId, label, sourcePath, snapshot, null, workspace);
     }
 
     @Override
     public synchronized ManagedPrismSession replace(String sessionId,
                                                     String label,
                                                     Path sourcePath,
-                                                    InMemoryPrismDataset dataContext,
+                                                    PrismSnapshotDataset snapshot,
+                                                    Supplier<PrismSnapshotDataset> snapshotReloader,
                                                     PrismSession workspace) {
         if (!sessions.containsKey(sessionId)) {
             throw new ChemOperationException("prism_session_not_found", "Prism session " + sessionId + " does not exist.");
         }
         ManagedPrismSession managed = new ManagedPrismSession(
-                sessionId, label, sourcePath, dataContext, Objects.requireNonNull(workspace, "workspace"),
+                sessionId, label, sourcePath, snapshot, snapshotReloader, Objects.requireNonNull(workspace, "workspace"),
                 Instant.now(), executor);
         ManagedPrismSessionSubscription previousSubscription = sessionSubscriptions.remove(sessionId);
         if (previousSubscription != null) previousSubscription.close();
         sessionSubscriptions.put(sessionId, managed.subscribe(this::publish));
         sessions.put(sessionId, managed);
         return managed;
+    }
+
+    public synchronized ManagedPrismSession replace(String sessionId, String label, Path sourcePath,
+                                                    InMemoryPrismDataset dataContext, PrismSession workspace) {
+        PrismSnapshotDataset snapshot = dataContext == null
+                ? new WorkspacePrismSnapshotDataset(workspace)
+                : PrismSessionImporter.toSnapshot(dataContext, sourcePath, true);
+        return replace(sessionId, label, sourcePath, snapshot, null, workspace);
     }
 
     @Override

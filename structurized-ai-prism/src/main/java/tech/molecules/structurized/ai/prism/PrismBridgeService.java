@@ -17,6 +17,14 @@ public interface PrismBridgeService {
 
     PrismSessionInfo getSessionInfo(String sessionId);
 
+    default PrismSnapshotDescription describeSnapshot(String sessionId) {
+        PrismSessionInfo info = getSessionInfo(sessionId);
+        return new PrismSnapshotDescription(info.summary(), info.endpoints(), info.rowSets(),
+                new tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotCapabilities(
+                        tech.molecules.structurized.prism.engine.snapshot.EndpointResultFidelity.NONE,
+                        false, false, false, false, false), null);
+    }
+
     List<PrismColumnSummary> listColumns(String sessionId);
 
     PrismSessionAgentDescription describeSessionForAgent(String sessionId);

@@ -71,7 +71,7 @@ class McpArtifactServiceTest {
         Path link = tempDir.resolve("link");
         try {
             Files.createSymbolicLink(link, outside);
-        } catch (UnsupportedOperationException e) {
+        } catch (UnsupportedOperationException | java.io.IOException | SecurityException e) {
             return;
         }
 

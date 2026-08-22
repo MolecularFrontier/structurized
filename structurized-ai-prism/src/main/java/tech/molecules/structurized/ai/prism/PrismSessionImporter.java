@@ -2,6 +2,9 @@ package tech.molecules.structurized.ai.prism;
 
 import tech.molecules.structurized.prism.engine.PrismRowSet;
 import tech.molecules.structurized.prism.engine.PrismSession;
+import tech.molecules.structurized.prism.engine.snapshot.PrismPackSnapshotDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotOrigin;
 import tech.molecules.structurized.prism.model.EndpointDataType;
 import tech.molecules.structurized.prism.model.EndpointDefinition;
 import tech.molecules.structurized.prism.pack.PrismPack;
@@ -30,23 +33,18 @@ final class PrismSessionImporter {
     private PrismSessionImporter() {}
 
     static PrismSession toSession(InMemoryPrismDataset dataset, Path sourcePath) {
-        PrismSession session = PrismSession.from(toPack(dataset, sourcePath));
-        for (SubjectSet subjectSet : dataset.getSubjectSets()) {
-            LinkedHashSet<String> rowIds = new LinkedHashSet<>(dataset.getSubjectsForSet(subjectSet.getId()));
-            if (!rowIds.isEmpty()) {
-                session.addRowSet(new PrismRowSet(
-                        subjectSet.getId(),
-                        subjectSet.getName(),
-                        subjectSet.getDescription(),
-                        rowIds,
-                        Map.of("source", "prism-tsv-subject-set")
-                ));
-            }
-        }
-        return session;
+        return PrismSession.from(toSnapshot(dataset, sourcePath, true));
     }
 
-    private static PrismPack toPack(InMemoryPrismDataset dataset, Path sourcePath) {
+    static PrismSnapshotDataset toSnapshot(InMemoryPrismDataset dataset, Path sourcePath, boolean reloadable) {
+        PrismPack pack = toPack(dataset, sourcePath);
+        PrismSnapshotDataset snapshot = new PrismPackSnapshotDataset(pack, new PrismSnapshotOrigin(
+                "prism-tsv", sourcePath == null ? null : sourcePath.toString(), null, null,
+                pack.manifest().createdAt(), pack.manifest().createdBy(), Map.of()), reloadable);
+        return new CanonicalPrismSnapshotDataset(snapshot, dataset);
+    }
+
+    static PrismPack toPack(InMemoryPrismDataset dataset, Path sourcePath) {
         List<EndpointDefinition> endpoints = dataset.getEndpointDefinitions();
         List<String> headers = headers(endpoints);
         ArrayList<List<String>> rows = new ArrayList<>();
@@ -65,8 +63,16 @@ final class PrismSessionImporter {
                         null,
                         endpoint.getPath(),
                         null,
+                        endpoint,
                         Map.of()
                 ))
+                .toList(), Map.of());
+        PrismPack.EndpointResultSet endpointResults = new PrismPack.EndpointResultSet("subject_id",
+                dataset.getEndpointValues().stream().map(value -> new PrismPack.EndpointResultRecord(
+                        value.getSubjectId(), value.getEndpointId(), value.getResult(), Map.of())).toList(), Map.of());
+        PrismPack.RowSetMetadata rowSets = new PrismPack.RowSetMetadata(dataset.getSubjectSets().stream()
+                .map(subjectSet -> new PrismPack.RowSet(subjectSet.getId(), subjectSet.getName(), subjectSet.getDescription(),
+                        dataset.getSubjectsForSet(subjectSet.getId()), subjectSetProvenance(subjectSet), Map.of()))
                 .toList(), Map.of());
         PrismPack.TableView tableView = new PrismPack.TableView(
                 "default",
@@ -82,7 +88,7 @@ final class PrismSessionImporter {
         String sourceName = sourcePath == null ? "Imported PRISM TSV dataset" : sourcePath.getFileName().toString();
         return new PrismPack(
                 new PrismPack.Manifest(
-                        "0.1",
+                        "0.3",
                         "structurized-prism-session",
                         sourceName,
                         "Imported from canonical PRISM TSV dataset",
@@ -91,9 +97,14 @@ final class PrismSessionImporter {
                         new PrismPack.DataframeRef("data", "dataframe.tsv", "schema.json", "subject", Map.of()),
                         "semantics/molecules.json",
                         "semantics/endpoints.json",
+                        new PrismPack.EndpointResultsRef("semantics/endpoint-results.jsonl", "subject_id", Map.of()),
+                        "semantics/row-sets.json",
                         "views/table.json",
                         "views/visualizations.json",
                         "attachments/attachments.json",
+                        null,
+                        null,
+                        null,
                         "provenance.json",
                         Map.of()
                 ),
@@ -101,12 +112,27 @@ final class PrismSessionImporter {
                 schema,
                 molecules,
                 endpointMetadata,
+                endpointResults,
+                rowSets,
                 tableView,
                 new PrismPack.VisualizationSet(List.of(), Map.of()),
                 new PrismPack.AttachmentSet(List.of(), Map.of()),
+                null,
+                null,
+                null,
                 Map.of("sourcePath", sourcePath == null ? "" : sourcePath.toString()),
                 List.of()
         );
+    }
+
+    private static Map<String, Object> subjectSetProvenance(SubjectSet subjectSet) {
+        java.util.LinkedHashMap<String, Object> provenance = new java.util.LinkedHashMap<>();
+        provenance.put("source", "prism-subject-set");
+        provenance.put("subjectSetId", subjectSet.getId());
+        provenance.put("setType", subjectSet.getSetType());
+        if (subjectSet.getSubjectSetScope() != null) provenance.put("scope", subjectSet.getSubjectSetScope());
+        if (subjectSet.getParentSetId() != null) provenance.put("parentSetId", subjectSet.getParentSetId());
+        return Map.copyOf(provenance);
     }
 
     private static List<String> headers(List<EndpointDefinition> endpoints) {

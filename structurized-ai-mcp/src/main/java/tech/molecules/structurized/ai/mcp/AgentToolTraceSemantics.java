@@ -18,11 +18,11 @@ import java.util.Set;
 final class AgentToolTraceSemantics {
     private static final Set<String> INSPECT = Set.of(
             "inspect_structure", "inspect_atom", "inspect_bond", "inspect_atom_environment",
-            "inspect_ring_system", "get_prism_subject", "get_decomposition_result");
+            "inspect_ring_system", "get_decomposition_result");
     private static final Set<String> COMPARE = Set.of("compare_structures", "find_shortest_path", "find_prism_graph_shortest_path");
     private static final Set<String> SEARCH = Set.of(
             "search_exact_structure", "search_substructure", "get_selection_members", "get_cluster_members",
-            "get_prism_cluster_members", "get_prism_row_set_members", "get_prism_row_set_structures", "list_prism_subjects",
+            "get_prism_cluster_members", "get_prism_row_set_members", "get_prism_row_set_structures",
             "get_clustering", "get_cluster", "get_selection", "get_prism_clustering", "get_prism_grouping");
     private static final Set<String> GRAPH_EXPAND = Set.of(
             "inspect_prism_graph_neighborhood", "create_prism_graph_neighborhood_row_set");
@@ -34,7 +34,7 @@ final class AgentToolTraceSemantics {
             "summarize_clusters_by_endpoint", "evaluate_decomposition", "get_decomposition_failures",
             "get_decomposition_fragment_summary", "get_decomposition_fragment_histogram",
             "cluster_structures", "cluster_prism_row_set", "evaluate_prism_prediction", "get_prediction_run",
-            "get_prism_endpoint_values", "get_decomposition_evaluation");
+            "get_prism_endpoint_results", "get_decomposition_evaluation");
 
     private AgentToolTraceSemantics() {}
 
