@@ -46,6 +46,7 @@ import tech.molecules.structurized.ai.prism.MaterializePrismSubjectSetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismDatasetRequest;
 import tech.molecules.structurized.ai.prism.OpenPrismPackRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
+import tech.molecules.structurized.ai.prism.PrismReportSource;
 import tech.molecules.structurized.ai.prism.RunPrismLiveEvaluatorRequest;
 import tech.molecules.structurized.ai.prism.PrismGroupingColumnSummary;
 import tech.molecules.structurized.ai.prism.PrismRowSetColumnSummary;
@@ -283,7 +284,7 @@ final class McpChemistryTools {
                 prop("artifact_id", "string", "Artifact ID returned by a file-output tool.")),
                 args -> artifacts.getArtifact(requiredString(args, "artifact_id")));
         add(result, "get_structurized_tool_guide", "Returns concise workflow and semantics guidance for using Structurized MCP tools.", schema(
-                prop("topic", "string", "overview, payload_hygiene, prism_workflow, clustering_workflow, mmp_graph_workflow, scaffold_sar_workflow, decomposition_rules, or artifact_output.")),
+                prop("topic", "string", "overview, payload_hygiene, prism_workflow, report_workflow, clustering_workflow, mmp_graph_workflow, scaffold_sar_workflow, decomposition_rules, or artifact_output.")),
                 this::toolGuide);
         add(result, "get_repository_info", "Returns metadata for one repository.", schema(required("repository_id"), prop("repository_id", "string", "Repository ID.")),
                 args -> repository(requiredString(args, "repository_id")));
@@ -429,6 +430,27 @@ final class McpChemistryTools {
                         requiredString(args, "session_id"),
                         Path.of(requiredString(args, "output_path")),
                         optionalString(args, "title", null)));
+        add(result, "get_prism_report_schema", "Returns the versioned .prism.md front matter, supported block fields, examples, and starter template.", schema(),
+                args -> prism.getReportSchema());
+        add(result, "validate_prism_report", "Parses and validates a .prism.md report against the current live Prism session without changing it.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("path", "string", "Existing .prism.md path. Supply exactly one of path or source."),
+                prop("source", "string", "Inline .prism.md source. Supply exactly one of source or path.")),
+                args -> prism.validateReport(requiredString(args, "session_id"), prismReportSource(args)));
+        add(result, "publish_prism_report", "Validates a .prism.md report and publishes it as a live Prism report view. Invalid reports do not change the workspace.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("path", "string", "Existing .prism.md path. Supply exactly one of path or source."),
+                prop("source", "string", "Inline .prism.md source. Supply exactly one of source or path.")),
+                args -> prism.publishReport(requiredString(args, "session_id"), prismReportSource(args)));
+        add(result, "save_prism_report", "Validates inline .prism.md source and safely writes a new report file. Existing files are never overwritten.", schema(
+                required("session_id", "source", "output_path"),
+                prop("session_id", "string", "Managed Prism session ID used for validation."),
+                prop("source", "string", "Complete inline .prism.md source."),
+                prop("output_path", "string", "New .prism.md output path in an existing directory.")),
+                args -> prism.saveReport(requiredString(args, "session_id"), requiredString(args, "source"),
+                        Path.of(requiredString(args, "output_path"))));
         add(result, "list_prediction_capabilities", "Lists endpoint-linked prediction capabilities available for one managed Prism session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -1260,6 +1282,13 @@ final class McpChemistryTools {
                     Use define_prism_endpoint_score with two or more {x, score} points to create a simple 0..1 desirability column. Reference the returned outputColumnId from Prism views or .prism.md reports. Use list_prism_endpoint_scores to inspect current definitions and export_prism_snapshot to save a new full-fidelity .prismpack; export never overwrites an existing file and requires a PrismPack-backed session.
                     Use list_prism_snapshot_endpoints and get_prism_endpoint_results for typed endpoint access. Full repository snapshots preserve all endpoint details; compact snapshots state their reduced fidelity explicitly. Use repository IDs returned by materialize_prism_row_set only for legacy structure search, clustering, and decomposition workflows.
                     Reloading with reload_prism_snapshot rebuilds a reloadable source snapshot and replaces the session, intentionally discarding runtime row sets, columns, graphs, clusters, and selections.
+                    """;
+            case "report_workflow" -> """
+                    # Prism Report Workflow
+                    Call get_prism_report_schema before authoring to discover the current .prism.md version, supported blocks, exact fields, examples, and starter template. Create runtime row sets, score columns, and SAR substituent columns before referencing them.
+                    Write a sidecar .prism.md file directly when filesystem access is available, or call save_prism_report with inline source. Always call validate_prism_report against the intended live session and repair every ERROR; warnings describe truncation or excluded SAR rows but do not prevent publication.
+                    Call publish_prism_report to add a valid report immediately as a live PrismLite workspace view. Publishing from path records the report path as provenance; inline publication records an inline source. Repeating publication creates a unique report view ID and never replaces an existing view.
+                    Reports may reference compound-table, compound-cards, structure-grid, scatter, column-summary, sar-1d, and sar-2d blocks. They are declarative only: compute data first with registered Prism/Structurized tools, then reference the resulting column and row-set IDs.
                     """;
             case "clustering_workflow" -> """
                     # Clustering Workflow
@@ -2386,6 +2415,16 @@ final class McpChemistryTools {
         } catch (Exception e) {
             throw new ChemOperationException("invalid_decomposition_config", "Could not parse decomposition config: " + e.getMessage(), e);
         }
+    }
+
+    private static PrismReportSource prismReportSource(ObjectNode args) {
+        String path = optionalString(args, "path", null);
+        String source = optionalString(args, "source", null);
+        if ((path == null) == (source == null)) {
+            throw new ChemOperationException("invalid_arguments",
+                    "Supply exactly one of path or source for the Prism report.");
+        }
+        return path == null ? PrismReportSource.inline(source) : PrismReportSource.fromPath(Path.of(path));
     }
 
     private Object inspectStructure(ObjectNode args) throws Exception {

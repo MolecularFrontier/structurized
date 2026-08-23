@@ -31,6 +31,11 @@
             <artifactId>prism-engine-ocl</artifactId>
             <version>${prism.version}</version>
         </dependency>
+        <dependency>
+            <groupId>tech.molecules</groupId>
+            <artifactId>prism-report-core</artifactId>
+            <version>${prism.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>

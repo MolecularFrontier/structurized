@@ -2,6 +2,7 @@ package tech.molecules.structurized.ai.prism;
 
 import tech.molecules.structurized.prism.prediction.PredictionCapability;
 import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotExportResult;
+import tech.molecules.structurized.prism.report.PrismReportSchema;
 
 import java.util.List;
 import java.nio.file.Path;
@@ -37,7 +38,16 @@ public interface PrismBridgeService {
 
     PrismSnapshotExportResult exportSnapshot(String sessionId, Path outputPath, String title);
 
+
+    PrismReportSchema getReportSchema();
+
+    PrismReportValidationSummary validateReport(String sessionId, PrismReportSource source);
+
+    PrismReportPublicationResult publishReport(String sessionId, PrismReportSource source);
+
+    PrismReportSaveResult saveReport(String sessionId, String source, Path outputPath);
     List<PrismMoleculeListSummary> listMoleculeLists(String sessionId);
+
 
     PrismMoleculeListView getMoleculeList(String sessionId, String listId);
 

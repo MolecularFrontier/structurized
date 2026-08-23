@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(99, tools.size());
+        assertEquals(103, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -73,6 +73,10 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "define_prism_endpoint_score"));
         assertTrue(hasTool(tools, "list_prism_endpoint_scores"));
         assertTrue(hasTool(tools, "export_prism_snapshot"));
+        assertTrue(hasTool(tools, "get_prism_report_schema"));
+        assertTrue(hasTool(tools, "validate_prism_report"));
+        assertTrue(hasTool(tools, "publish_prism_report"));
+        assertTrue(hasTool(tools, "save_prism_report"));
         assertTrue(hasTool(tools, "list_prediction_capabilities"));
         assertTrue(hasTool(tools, "describe_prediction_capability"));
         assertTrue(hasTool(tools, "evaluate_prism_prediction"));
@@ -1311,6 +1315,57 @@ class McpJsonRpcHandlerTest {
     }
 
     @Test
+    void agentCanDiscoverValidateSaveAndPublishPrismReports() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+
+        JsonNode schema = call(handler, request(1, "get_prism_report_schema", "{}"));
+        assertEquals(1, schema.at("/result/structuredContent/prismReportVersion").asInt());
+        assertEquals(7, schema.at("/result/structuredContent/blockTypes").size());
+        assertTrue(schema.at("/result/structuredContent/blockTypes").toString().contains("compound-cards"));
+
+        var openArgs = mapper.createObjectNode();
+        openArgs.put("path", prismDataset().toString());
+        openArgs.put("session_id", "reports");
+        call(handler, request(2, "open_prism_snapshot", mapper.writeValueAsString(openArgs)));
+
+        var invalidArgs = mapper.createObjectNode();
+        invalidArgs.put("session_id", "reports");
+        invalidArgs.put("source", prismReport("pIC5O"));
+        JsonNode invalid = call(handler, request(3, "validate_prism_report",
+                mapper.writeValueAsString(invalidArgs)));
+        assertFalse(invalid.at("/result/structuredContent/valid").asBoolean());
+        assertTrue(invalid.at("/result/structuredContent/diagnostics").toString().contains("pIC50"));
+
+        Path output = tempDir.resolve("agent-analysis.prism.md");
+        var saveArgs = mapper.createObjectNode();
+        saveArgs.put("session_id", "reports");
+        saveArgs.put("source", prismReport("pIC50"));
+        saveArgs.put("output_path", output.toString());
+        JsonNode saved = call(handler, request(4, "save_prism_report",
+                mapper.writeValueAsString(saveArgs)));
+        assertTrue(saved.at("/result/structuredContent/saved").asBoolean(), saved.toPrettyString());
+        assertTrue(Files.isRegularFile(output));
+
+        var pathArgs = mapper.createObjectNode();
+        pathArgs.put("session_id", "reports");
+        pathArgs.put("path", output.toString());
+        JsonNode validated = call(handler, request(5, "validate_prism_report",
+                mapper.writeValueAsString(pathArgs)));
+        assertTrue(validated.at("/result/structuredContent/valid").asBoolean(), validated.toPrettyString());
+
+        JsonNode published = call(handler, request(6, "publish_prism_report",
+                mapper.writeValueAsString(pathArgs)));
+        assertTrue(published.at("/result/structuredContent/published").asBoolean(), published.toPrettyString());
+        assertEquals("report:agent-analysis",
+                published.at("/result/structuredContent/viewId").asText());
+
+        JsonNode guide = call(handler, request(7, "get_structurized_tool_guide",
+                "{\"topic\":\"report_workflow\"}"));
+        assertTrue(guide.at("/result/structuredContent/markdown").asText()
+                .contains("validate_prism_report"));
+    }
+
+    @Test
     void unknownJsonRpcMethodReturnsProtocolError() throws Exception {
         McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
 
@@ -1395,6 +1450,28 @@ class McpJsonRpcHandlerTest {
                 ""
         ));
         return dir;
+    }
+
+    private static String prismReport(String valueColumn) {
+        return """
+                ---
+                prismReportVersion: 1
+                dataset: current
+                title: Agent analysis
+                ---
+
+                # Agent analysis
+
+                ~~~prism
+                {
+                  "type": "scatter",
+                  "id": "activity-property",
+                  "rowSet": "all",
+                  "xColumn": "%s",
+                  "yColumn": "logD"
+                }
+                ~~~
+                """.formatted(valueColumn);
     }
 
     private JsonNode call(McpJsonRpcHandler handler, String request) throws Exception {

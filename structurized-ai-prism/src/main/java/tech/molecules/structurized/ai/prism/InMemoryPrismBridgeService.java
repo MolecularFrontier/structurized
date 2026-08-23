@@ -91,6 +91,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     private final PrismMmpGraphService mmpGraphs;
     private final PrismSimilarityGraphService similarityGraphs;
     private final PrismPredictionService predictions;
+    private final PrismReportService reports;
     private final PrismSessionRegistry sessionRegistry;
     private final OclMoleculeDocumentCodec moleculeCodec = new OclMoleculeDocumentCodec();
     private final Map<String, MaterializationMapping> materializationsByRepositoryId = new LinkedHashMap<>();
@@ -120,6 +121,27 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         this.mmpGraphs = new PrismMmpGraphService();
         this.similarityGraphs = new PrismSimilarityGraphService();
         this.predictions = new PrismPredictionService(this.artifactRegistry, Objects.requireNonNull(predictionRegistry, "predictionRegistry"));
+        this.reports = new PrismReportService(this.sessionRegistry);
+    }
+
+    @Override
+    public tech.molecules.structurized.prism.report.PrismReportSchema getReportSchema() {
+        return reports.schema();
+    }
+
+    @Override
+    public PrismReportValidationSummary validateReport(String sessionId, PrismReportSource source) {
+        return reports.validate(sessionId, source);
+    }
+
+    @Override
+    public PrismReportPublicationResult publishReport(String sessionId, PrismReportSource source) {
+        return reports.publish(sessionId, source);
+    }
+
+    @Override
+    public PrismReportSaveResult saveReport(String sessionId, String source, Path outputPath) {
+        return reports.save(sessionId, source, outputPath);
     }
 
     @Override

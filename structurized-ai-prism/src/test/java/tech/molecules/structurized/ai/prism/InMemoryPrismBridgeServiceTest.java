@@ -665,6 +665,116 @@ class InMemoryPrismBridgeServiceTest {
         assertFalse(populated.documents().getLast().structure().isBlank());
     }
 
+    @Test
+    void validatesPublishesAndSafelySavesPrismReports() throws Exception {
+        TestContext ctx = context();
+        ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "reports", "Report dataset"));
+
+        assertEquals(7, ctx.prism.getReportSchema().blockTypes().size());
+        assertTrue(ctx.prism.getReportSchema().blockTypes().stream()
+                .anyMatch(block -> block.type().equals("compound-cards")));
+        PrismReportValidationSummary comparison = ctx.prism.validateReport(
+                "reports", PrismReportSource.inline(comparisonReport()));
+        assertTrue(comparison.valid(), comparison.diagnostics().toString());
+        assertTrue(comparison.referencedColumnIds().containsAll(List.of("smiles", "subject_id", "pIC50")));
+
+        ManagedPrismSession managed = ctx.registry.require("reports");
+        long unchangedRevision = managed.revision();
+
+        PrismReportValidationSummary invalid = ctx.prism.validateReport(
+                "reports", PrismReportSource.inline(report("pIC5O")));
+        assertFalse(invalid.valid());
+        assertTrue(invalid.diagnostics().stream().anyMatch(item ->
+                item.code().equals("UNKNOWN_COLUMN") && item.message().contains("pIC50")));
+
+        PrismReportPublicationResult rejected = ctx.prism.publishReport(
+                "reports", PrismReportSource.inline(report("pIC5O")));
+        assertFalse(rejected.published());
+        assertEquals(unchangedRevision, managed.revision());
+        Path invalidOutput = tempDir.resolve("invalid-report.prism.md");
+        PrismReportSaveResult rejectedSave = ctx.prism.saveReport(
+                "reports", report("pIC5O"), invalidOutput);
+        assertFalse(rejectedSave.saved());
+        assertFalse(Files.exists(invalidOutput));
+
+        PrismReportValidationSummary valid = ctx.prism.validateReport(
+                "reports", PrismReportSource.inline(report("pIC50")));
+        assertTrue(valid.valid(), valid.diagnostics().toString());
+        assertEquals(List.of("all"), valid.referencedRowSetIds());
+        assertTrue(valid.referencedColumnIds().contains("smiles"));
+        assertTrue(valid.referencedColumnIds().contains("pIC50"));
+
+        long revision = managed.revision();
+        PrismReportPublicationResult published = ctx.prism.publishReport(
+                "reports", PrismReportSource.inline(report("pIC50")));
+        assertTrue(published.published());
+        assertEquals("report:agent-report", published.viewId());
+        assertEquals(revision + 1, managed.revision());
+        assertEquals("report.prism-markdown", managed.workspace().view(published.viewId()).type());
+
+        Path output = tempDir.resolve("agent-report.prism.md");
+        PrismReportSaveResult saved = ctx.prism.saveReport("reports", report("pIC50"), output);
+        assertTrue(saved.saved());
+        assertEquals(report("pIC50"), Files.readString(output));
+        ChemOperationException exists = assertThrows(ChemOperationException.class,
+                () -> ctx.prism.saveReport("reports", report("pIC50"), output));
+        assertEquals("prism_report_exists", exists.code());
+    }
+
+    private static String comparisonReport() {
+        return """
+                ---
+                prismReportVersion: 1
+                dataset: current
+                title: Lead comparison
+                ---
+                ~~~prism
+                {
+                  "type": "compound-cards",
+                  "id": "lead-comparison",
+                  "rowSet": "hits",
+                  "structureColumn": "smiles",
+                  "titleColumn": "subject_id",
+                  "referenceRow": "CMP-002",
+                  "properties": [
+                    {
+                      "column": "pIC50",
+                      "format": "0.00",
+                      "showDelta": true,
+                      "colorColumn": "pIC50"
+                    }
+                  ],
+                  "maxCards": 2
+                }
+                ~~~
+                """;
+    }
+
+    private static String report(String valueColumn) {
+        return """
+                ---
+                prismReportVersion: 1
+                dataset: current
+                title: Agent report
+                ---
+
+                # Agent report
+
+                ~~~prism
+                {
+                  "type": "compound-table",
+                  "id": "key-compounds",
+                  "rowSet": "all",
+                  "structureColumn": "smiles",
+                  "columns": [
+                    {"column": "subject_id"},
+                    {"column": "%s", "format": "0.00"}
+                  ]
+                }
+                ~~~
+                """.formatted(valueColumn);
+    }
+
     private TestContext context() {
         StructureRepositoryService repositories = new InMemoryStructureRepositoryService();
         InMemoryPrismSessionRegistry registry = new InMemoryPrismSessionRegistry();

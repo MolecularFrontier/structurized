@@ -80,6 +80,7 @@ Notes
 - `structurized-workbench` contains reusable Swing components, a PRISM repository explorer app, and the first MMP endpoint-statistics workbench
 - Conceptual overview: `docs/STRUCTURIZED_CONCEPTS.md`
 - Prism managed-session integration: [`docs/PRISM_SESSION_INTEGRATION.md`](docs/PRISM_SESSION_INTEGRATION.md)
+- Agent-authored Prism report workflow: [docs/PRISM_REPORT_AGENT_WORKFLOW.md](docs/PRISM_REPORT_AGENT_WORKFLOW.md)
 - Parent-aware context shell spec: `docs/CONTEXT_SHELL_ENCODING.md`
 - Scaffold-mode notes: `docs/SCAFFOLD_MODE.md`
 - Scaffold discovery notes: `docs/SCAFFOLD_DISCOVERY.md`
