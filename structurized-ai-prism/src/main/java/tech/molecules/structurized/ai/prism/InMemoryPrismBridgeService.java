@@ -19,6 +19,7 @@ import tech.molecules.structurized.prism.engine.PrismGroupingMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeDocument;
 import tech.molecules.structurized.prism.engine.PrismMoleculeDocumentMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeList;
+import tech.molecules.structurized.prism.engine.PrismOperationException;
 import tech.molecules.structurized.prism.engine.PrismOperationResult;
 import tech.molecules.structurized.prism.engine.PrismColumnSchema;
 import tech.molecules.structurized.prism.engine.PrismRowGraph;
@@ -28,6 +29,8 @@ import tech.molecules.structurized.prism.engine.PrismSession;
 import tech.molecules.structurized.prism.engine.TextPatternFilter;
 import tech.molecules.structurized.prism.engine.snapshot.PrismPackSnapshotDataset;
 import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotExportResult;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotExportService;
 import tech.molecules.structurized.prism.engine.live.PrismLiveBinding;
 import tech.molecules.structurized.prism.engine.live.PrismLiveEvaluation;
 import tech.molecules.structurized.prism.engine.live.PrismLiveExecutionMode;
@@ -51,6 +54,7 @@ import tech.molecules.structurized.prism.result.NumericResult;
 import tech.molecules.structurized.prism.result.NumericState;
 import tech.molecules.structurized.prism.result.OptionalNumericResult;
 import tech.molecules.structurized.prism.result.OptionalNumericState;
+import tech.molecules.structurized.prism.score.EndpointScoreDefinition;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
@@ -245,6 +249,69 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 countBy(columns, PrismColumnSummary::type),
                 countBy(columns, PrismColumnSummary::semanticType)
         );
+    }
+
+    @Override
+    public synchronized DefinePrismEndpointScoreResult defineEndpointScore(DefinePrismEndpointScoreRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession managed = session(request.sessionId());
+        try {
+            EndpointScoreDefinition definition = new EndpointScoreDefinition(
+                    request.scoreId(),
+                    request.endpointId(),
+                    request.displayName(),
+                    request.description(),
+                    EndpointScoreDefinition.LINE_SEGMENT_V1,
+                    request.xScale(),
+                    request.clampOutsideRange() == null || request.clampOutsideRange(),
+                    request.points(),
+                    Map.of("source", "agent", "createdAt", Instant.now().toString())
+            );
+            PrismOperationResult operation = managed.callAs(
+                    ManagedPrismSessionChangeOrigin.MCP,
+                    () -> managed.workspace().defineEndpointScore(definition, request.outputColumnId())
+            );
+            String sourceColumnId = String.valueOf(operation.output().get("sourceColumnId"));
+            String outputColumnId = String.valueOf(operation.output().get("outputColumnId"));
+            boolean reused = Boolean.TRUE.equals(operation.output().get("reused"));
+            EndpointScoreDefinition stored = managed.workspace().scoreDefinition(definition.id());
+            return new DefinePrismEndpointScoreResult(
+                    new PrismEndpointScoreSummary(stored, stored.fingerprint(), sourceColumnId, outputColumnId),
+                    reused,
+                    managed.revision(),
+                    operation.warnings()
+            );
+        } catch (PrismOperationException exception) {
+            throw new ChemOperationException("invalid_prism_endpoint_score", exception.getMessage(), exception);
+        } catch (IllegalArgumentException exception) {
+            throw new ChemOperationException("invalid_prism_endpoint_score", exception.getMessage(), exception);
+        }
+    }
+
+    @Override
+    public synchronized List<PrismEndpointScoreSummary> listEndpointScores(String sessionId) {
+        ManagedPrismSession managed = session(sessionId);
+        return managed.workspace().scoreDefinitions().stream().map(definition -> {
+            PrismColumn scoreColumn = managed.workspace().table().columns().stream()
+                    .filter(column -> definition.id().equals(column.schema().raw().get("scoreId")))
+                    .findFirst()
+                    .orElse(null);
+            String sourceColumnId = scoreColumn == null ? null
+                    : Objects.toString(scoreColumn.schema().raw().get("sourceColumnId"), null);
+            return new PrismEndpointScoreSummary(definition, definition.fingerprint(), sourceColumnId,
+                    scoreColumn == null ? null : scoreColumn.id());
+        }).toList();
+    }
+
+    @Override
+    public synchronized PrismSnapshotExportResult exportSnapshot(String sessionId, Path outputPath, String title) {
+        ManagedPrismSession managed = session(sessionId);
+        try {
+            return PrismSnapshotExportService.export(
+                    managed.snapshot(), managed.workspace(), outputPath, title, "Structurized MCP");
+        } catch (IOException | IllegalArgumentException exception) {
+            throw new ChemOperationException("prism_snapshot_export_failed", exception.getMessage(), exception);
+        }
     }
 
     @Override

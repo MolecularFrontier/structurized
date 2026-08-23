@@ -1,8 +1,10 @@
 package tech.molecules.structurized.ai.prism;
 
 import tech.molecules.structurized.prism.prediction.PredictionCapability;
+import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotExportResult;
 
 import java.util.List;
+import java.nio.file.Path;
 
 public interface PrismBridgeService {
     PrismDatasetSummary openDataset(OpenPrismDatasetRequest request);
@@ -28,6 +30,12 @@ public interface PrismBridgeService {
     List<PrismColumnSummary> listColumns(String sessionId);
 
     PrismSessionAgentDescription describeSessionForAgent(String sessionId);
+
+    DefinePrismEndpointScoreResult defineEndpointScore(DefinePrismEndpointScoreRequest request);
+
+    List<PrismEndpointScoreSummary> listEndpointScores(String sessionId);
+
+    PrismSnapshotExportResult exportSnapshot(String sessionId, Path outputPath, String title);
 
     List<PrismMoleculeListSummary> listMoleculeLists(String sessionId);
 

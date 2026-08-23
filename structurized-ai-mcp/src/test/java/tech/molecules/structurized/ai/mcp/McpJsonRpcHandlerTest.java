@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(95, tools.size());
+        assertEquals(98, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -70,6 +70,9 @@ class McpJsonRpcHandlerTest {
         assertFalse(hasTool(tools, "get_prism_session_info"));
         assertTrue(hasTool(tools, "list_prism_columns"));
         assertTrue(hasTool(tools, "describe_prism_session_for_agent"));
+        assertTrue(hasTool(tools, "define_prism_endpoint_score"));
+        assertTrue(hasTool(tools, "list_prism_endpoint_scores"));
+        assertTrue(hasTool(tools, "export_prism_snapshot"));
         assertTrue(hasTool(tools, "list_prediction_capabilities"));
         assertTrue(hasTool(tools, "describe_prediction_capability"));
         assertTrue(hasTool(tools, "evaluate_prism_prediction"));
@@ -318,6 +321,57 @@ class McpJsonRpcHandlerTest {
 
         JsonNode columns = call(handler, request(6, "list_prism_columns", "{\"session_id\":\"predict\"}"));
         assertTrue(columns.at("/result/structuredContent").toString().contains("pred_mcp.pIC50_predicted.status"));
+    }
+
+    @Test
+    void canDefineListAndExportReportReadyEndpointScores() throws Exception {
+        McpJsonRpcHandler handler = McpJsonRpcHandler.createDefault();
+        String source = examplePrismPack().toString().replace("\\", "\\\\");
+        Path outputPath = tempDir.resolve("scored-analysis.prismpack");
+        String exportedPath = outputPath.toString().replace("\\", "\\\\");
+        call(handler, request(1, "open_prism_snapshot",
+                "{\"path\":\"" + source + "\",\"session_id\":\"scored\"}"));
+
+        JsonNode defined = call(handler, request(2, "define_prism_endpoint_score", """
+                {
+                  "session_id": "scored",
+                  "score_id": "potency_desirability",
+                  "endpoint_id": "pIC50",
+                  "display_name": "Potency desirability",
+                  "points": [
+                    {"x": 5.0, "score": 0.0},
+                    {"x": 8.0, "score": 1.0}
+                  ]
+                }
+                """));
+        assertFalse(defined.at("/result/structuredContent/reused").asBoolean());
+        assertEquals("score__potency_desirability",
+                defined.at("/result/structuredContent/score/outputColumnId").asText());
+
+        JsonNode repeated = call(handler, request(3, "define_prism_endpoint_score", """
+                {
+                  "session_id": "scored",
+                  "score_id": "potency_desirability",
+                  "endpoint_id": "pIC50",
+                  "points": [{"x": 5.0, "score": 0.0}, {"x": 8.0, "score": 1.0}]
+                }
+                """));
+        assertTrue(repeated.at("/result/structuredContent/reused").asBoolean());
+
+        JsonNode scores = call(handler, request(4, "list_prism_endpoint_scores", "{\"session_id\":\"scored\"}"));
+        assertEquals(1, scores.at("/result/structuredContent").size());
+        assertEquals("pIC50", scores.at("/result/structuredContent/0/sourceColumnId").asText());
+
+        JsonNode exported = call(handler, request(5, "export_prism_snapshot",
+                "{\"session_id\":\"scored\",\"output_path\":\"" + exportedPath + "\",\"title\":\"Scored analysis\"}"));
+        assertEquals("score__potency_desirability",
+                exported.at("/result/structuredContent/derivedColumnIds/0").asText());
+        assertTrue(Files.isRegularFile(outputPath));
+
+        call(handler, request(6, "open_prism_snapshot",
+                "{\"path\":\"" + exportedPath + "\",\"session_id\":\"reopened_scored\"}"));
+        JsonNode columns = call(handler, request(7, "list_prism_columns", "{\"session_id\":\"reopened_scored\"}"));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("score__potency_desirability"));
     }
 
     @Test

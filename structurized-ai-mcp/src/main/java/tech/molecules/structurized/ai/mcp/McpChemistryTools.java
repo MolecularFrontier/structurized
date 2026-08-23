@@ -29,6 +29,7 @@ import tech.molecules.structurized.ai.model.SubstructureSearchRequest;
 import tech.molecules.structurized.ai.prism.ClusterPrismRowSetRequest;
 import tech.molecules.structurized.ai.prism.AddPrismMoleculesRequest;
 import tech.molecules.structurized.ai.prism.ConfigurePrismLiveEvaluatorRequest;
+import tech.molecules.structurized.ai.prism.DefinePrismEndpointScoreRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismMoleculeListRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismClusterRowSetRequest;
 import tech.molecules.structurized.ai.prism.CreatePrismGraphNeighborhoodRowSetRequest;
@@ -60,6 +61,7 @@ import tech.molecules.structurized.clustering.SimilarityCluster;
 import tech.molecules.structurized.prism.result.EndpointResult;
 import tech.molecules.structurized.prism.result.NumericResult;
 import tech.molecules.structurized.prism.result.NumericState;
+import tech.molecules.structurized.prism.score.ScorePoint;
 import tech.molecules.structurized.decomposition.DecompositionConfig;
 
 import java.nio.file.Path;
@@ -153,6 +155,36 @@ final class McpChemistryTools {
         return prismPack
                 ? prism.openPack(new OpenPrismPackRequest(path, sessionId, label))
                 : prism.openDataset(new OpenPrismDatasetRequest(path, sessionId, label));
+    }
+
+    private Object definePrismEndpointScore(ObjectNode args) {
+        JsonNode pointsNode = args.get("points");
+        if (pointsNode == null || !pointsNode.isArray()) {
+            throw new ChemOperationException("invalid_arguments", "Argument points must be an array of {x, score} objects.");
+        }
+        ArrayList<ScorePoint> points = new ArrayList<>();
+        for (JsonNode item : pointsNode) {
+            if (!(item instanceof ObjectNode point)) {
+                throw new ChemOperationException("invalid_arguments", "Argument points must contain only objects.");
+            }
+            JsonNode x = point.get("x");
+            JsonNode score = point.get("score");
+            if (x == null || !x.isNumber() || score == null || !score.isNumber()) {
+                throw new ChemOperationException("invalid_arguments", "Each score point requires numeric x and score fields.");
+            }
+            points.add(new ScorePoint(x.asDouble(), score.asDouble()));
+        }
+        return prism.defineEndpointScore(new DefinePrismEndpointScoreRequest(
+                requiredString(args, "session_id"),
+                requiredString(args, "score_id"),
+                requiredString(args, "endpoint_id"),
+                optionalString(args, "display_name", null),
+                optionalString(args, "description", null),
+                optionalString(args, "x_scale", "linear"),
+                optionalNullableBoolean(args, "clamp_outside_range"),
+                points,
+                optionalString(args, "output_column_id", null)
+        ));
     }
 
     private Object getPrismEndpointResults(ObjectNode args) {
@@ -372,6 +404,31 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
                 args -> prism.describeSessionForAgent(requiredString(args, "session_id")));
+        add(result, "define_prism_endpoint_score", "Defines a piecewise endpoint score and materializes it as a numeric Prism column for views and reports.", schema(
+                required("session_id", "score_id", "endpoint_id", "points"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("score_id", "string", "Stable score definition ID."),
+                prop("endpoint_id", "string", "Numeric runtime column ID or unique endpoint ID."),
+                prop("display_name", "string", "Optional score column label."),
+                prop("description", "string", "Optional scientific rationale."),
+                prop("x_scale", "string", "linear (default) or log10 interpolation."),
+                prop("clamp_outside_range", "boolean", "Clamp values outside the defined points; defaults to true."),
+                scorePointsProp(),
+                prop("output_column_id", "string", "Optional runtime score column ID; defaults to score__<score_id>.")),
+                this::definePrismEndpointScore);
+        add(result, "list_prism_endpoint_scores", "Lists runtime endpoint score definitions and their materialized Prism columns.", schema(
+                required("session_id"),
+                prop("session_id", "string", "Managed Prism session ID.")),
+                args -> prism.listEndpointScores(requiredString(args, "session_id")));
+        add(result, "export_prism_snapshot", "Writes a new full-fidelity PrismPack snapshot containing runtime scores, score columns, and row sets. Existing files are never overwritten.", schema(
+                required("session_id", "output_path"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("output_path", "string", "New .prismpack output path; it must not already exist."),
+                prop("title", "string", "Optional exported snapshot title.")),
+                args -> prism.exportSnapshot(
+                        requiredString(args, "session_id"),
+                        Path.of(requiredString(args, "output_path")),
+                        optionalString(args, "title", null)));
         add(result, "list_prediction_capabilities", "Lists endpoint-linked prediction capabilities available for one managed Prism session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
@@ -1181,6 +1238,7 @@ final class McpChemistryTools {
                     # Structurized MCP Guide
                     Start compact: use counts, summaries, selections, and endpoint aggregations before requesting row-level detail.
                     Main flow: open_prism_snapshot -> describe_prism_snapshot -> create_prism_column_row_set -> summarize_prism_row_set_by_columns, mine_prism_mmp_graph, or mine_prism_similarity_graph -> analyze_prism_graph/inspect_prism_graph_neighborhood for session-native analysis. Use materialize_prism_row_set only when a standalone chemistry repository is required; search_substructure(create_selection:true) -> combine_selections when needed -> summarize_selection_by_endpoint, evaluate_decomposition(selection_id), or export_selection_table; create_decomposition_config -> evaluate_decomposition -> get_decomposition_fragment_histogram.
+                    For report-ready desirability coloring, define_prism_endpoint_score materializes a normal numeric score column. Export a new analysis snapshot with export_prism_snapshot when scores and runtime row sets should be shared or archived.
                     Use output_target:file for large drill-downs and list_artifacts/get_artifact_info to recover artifact paths. Use topic:mmp_graph_workflow and topic:scaffold_sar_workflow for graph and scaffold SAR strategies.
                     """;
             case "payload_hygiene" -> """
@@ -1192,6 +1250,7 @@ final class McpChemistryTools {
             case "prism_workflow" -> """
                     # Prism Workflow
                     Open either a PrismPack or canonical TSV bundle with open_prism_snapshot, then call describe_prism_snapshot to inspect endpoint-result fidelity, capabilities, origin, endpoints, and imported row sets. Use describe_prism_session_for_agent or list_prism_columns for runtime workspace detail. Define an analysis scope with create_prism_column_row_set, summarize it with summarize_prism_row_set_by_columns, and use cluster_prism_row_set to publish a reusable grouping into the same session.
+                    Use define_prism_endpoint_score with two or more {x, score} points to create a simple 0..1 desirability column. Reference the returned outputColumnId from Prism views or .prism.md reports. Use list_prism_endpoint_scores to inspect current definitions and export_prism_snapshot to save a new full-fidelity .prismpack; export never overwrites an existing file and requires a PrismPack-backed session.
                     Use list_prism_snapshot_endpoints and get_prism_endpoint_results for typed endpoint access. Full repository snapshots preserve all endpoint details; compact snapshots state their reduced fidelity explicitly. Use repository IDs returned by materialize_prism_row_set only for legacy structure search, clustering, and decomposition workflows.
                     Reloading with reload_prism_snapshot rebuilds a reloadable source snapshot and replaces the session, intentionally discarding runtime row sets, columns, graphs, clusters, and selections.
                     """;
@@ -2396,6 +2455,22 @@ final class McpChemistryTools {
         schema.put("items", items);
         schema.put("description", description);
         return new Property(name, schema);
+    }
+
+    private static Property scorePointsProp() {
+        Map<String, Object> itemProperties = new LinkedHashMap<>();
+        itemProperties.put("x", Map.of("type", "number", "description", "Endpoint value."));
+        itemProperties.put("score", Map.of("type", "number", "description", "Desirability from 0 to 1."));
+        Map<String, Object> items = new LinkedHashMap<>();
+        items.put("type", "object");
+        items.put("properties", itemProperties);
+        items.put("required", List.of("x", "score"));
+        items.put("additionalProperties", false);
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "array");
+        schema.put("items", items);
+        schema.put("description", "At least two unique piecewise interpolation points.");
+        return new Property("points", schema);
     }
 
     private static Property moleculeArrayProp() {

@@ -7,6 +7,8 @@ import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotCapabiliti
 import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotDataset;
 import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotEndpoint;
 import tech.molecules.structurized.prism.engine.snapshot.PrismSnapshotOrigin;
+import tech.molecules.structurized.prism.engine.snapshot.PrismPackBackedSnapshotDataset;
+import tech.molecules.structurized.prism.pack.PrismPack;
 import tech.molecules.structurized.prism.provider.inmemory.InMemoryPrismDataset;
 import tech.molecules.structurized.prism.score.EndpointScoreDefinition;
 
@@ -14,7 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 /** Snapshot adapter retaining source records only for deprecated non-snapshot Java APIs. */
-final class CanonicalPrismSnapshotDataset implements PrismSnapshotDataset {
+final class CanonicalPrismSnapshotDataset implements PrismPackBackedSnapshotDataset {
     private final PrismSnapshotDataset delegate;
     private final InMemoryPrismDataset sourceDataset;
 
@@ -25,6 +27,9 @@ final class CanonicalPrismSnapshotDataset implements PrismSnapshotDataset {
 
     InMemoryPrismDataset sourceDataset() { return sourceDataset; }
     @Override public PrismTable table() { return delegate.table(); }
+    @Override public PrismPack sourcePack() {
+        return ((PrismPackBackedSnapshotDataset) delegate).sourcePack();
+    }
     @Override public List<PrismSnapshotEndpoint> endpoints() { return delegate.endpoints(); }
     @Override public List<PrismRowSet> rowSets() { return delegate.rowSets(); }
     @Override public List<EndpointScoreDefinition> scoreDefinitions() { return delegate.scoreDefinitions(); }
