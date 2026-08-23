@@ -21,6 +21,7 @@ import tech.molecules.structurized.prism.engine.PrismMoleculeDocumentMode;
 import tech.molecules.structurized.prism.engine.PrismMoleculeList;
 import tech.molecules.structurized.prism.engine.PrismOperationException;
 import tech.molecules.structurized.prism.engine.PrismOperationResult;
+import tech.molecules.structurized.prism.engine.RowIdMaterializedColumnData;
 import tech.molecules.structurized.prism.engine.PrismColumnSchema;
 import tech.molecules.structurized.prism.engine.PrismRowGraph;
 import tech.molecules.structurized.prism.engine.PrismRowGraphEdge;
@@ -37,6 +38,8 @@ import tech.molecules.structurized.prism.engine.live.PrismLiveExecutionMode;
 import tech.molecules.structurized.prism.engine.live.PrismLiveSuccessfulResult;
 import tech.molecules.structurized.prism.engine.TextPatternMode;
 import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
+import tech.molecules.structurized.prism.engine.ocl.SarSubstituent;
+import tech.molecules.structurized.prism.engine.ocl.SarSubstituentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
 import tech.molecules.structurized.prism.io.PrismTsvSnapshotLoader;
 import tech.molecules.structurized.prism.model.CategoryDefinition;
@@ -1438,6 +1441,166 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 skipped,
                 structures
         );
+    }
+
+    @Override
+    public synchronized MaterializePrismSarResult materializeSarAnalysis(MaterializePrismSarRequest request) {
+        Objects.requireNonNull(request, "request");
+        ManagedPrismSession session = session(request.sessionId());
+        String analysisId = normalizeId(request.analysisId(), "analysisId");
+        String sourceRowSetId = normalizeId(request.sourceRowSetId(), "sourceRowSetId");
+        PrismRowSet sourceRowSet = rowSet(session, sourceRowSetId);
+        String outputPrefix = normalizeId(request.outputPrefix(), "outputPrefix");
+        String scaffoldIdcode = normalizeId(request.scaffoldIdcode(), "scaffoldIdcode");
+        String fingerprint = normalizeId(request.analysisFingerprint(), "analysisFingerprint");
+        if (request.dimensions().isEmpty()) {
+            throw new ChemOperationException("invalid_sar_materialization", "At least one SAR dimension is required.");
+        }
+        if (request.unmatchedCount() < 0 || request.multiAttachmentCount() < 0 || request.ambiguousCount() < 0) {
+            throw new ChemOperationException("invalid_sar_materialization", "SAR diagnostic counts must not be negative.");
+        }
+
+        LinkedHashSet<String> matchedRowIds = new LinkedHashSet<>(request.matchedRowIds());
+        for (String rowId : matchedRowIds) {
+            if (!sourceRowSet.rowIds().contains(rowId)) {
+                throw new ChemOperationException("invalid_sar_materialization",
+                        "Matched row " + rowId + " is not in source row set " + sourceRowSetId + ".");
+            }
+        }
+
+        LinkedHashMap<String, String> columnIds = new LinkedHashMap<>();
+        LinkedHashSet<String> normalizedDimensionIds = new LinkedHashSet<>();
+        for (PrismSarDimensionAssignment dimension : request.dimensions()) {
+            if (dimension == null || dimension.label().isBlank()) {
+                throw new ChemOperationException("invalid_sar_materialization", "Every SAR dimension requires a non-blank label.");
+            }
+            if (dimension.scaffoldAtom() < 0) {
+                throw new ChemOperationException("invalid_sar_materialization", "SAR scaffold atom indices must not be negative.");
+            }
+            String dimensionId = sanitizeSarDimensionId(dimension.label());
+            if (!normalizedDimensionIds.add(dimensionId)) {
+                throw new ChemOperationException("invalid_sar_materialization",
+                        "SAR dimension labels must produce unique column IDs; duplicate " + dimension.label() + ".");
+            }
+            columnIds.put(dimension.label(), outputPrefix + "." + dimensionId);
+            for (Map.Entry<String, String> value : dimension.valuesByRowId().entrySet()) {
+                if (!sourceRowSet.rowIds().contains(value.getKey())) {
+                    throw new ChemOperationException("invalid_sar_materialization",
+                            "SAR dimension " + dimension.label() + " references row " + value.getKey()
+                                    + " outside source row set " + sourceRowSetId + ".");
+                }
+                if (value.getValue() == null
+                        || SarSubstituentCodec.decode(value.getValue()).type() == SarSubstituent.Type.LABEL) {
+                    throw new ChemOperationException("invalid_sar_materialization",
+                            "SAR dimension " + dimension.label() + " has an invalid substituent encoding for row "
+                                    + value.getKey() + ".");
+                }
+            }
+        }
+
+        String matchedRowSetId = outputPrefix + ".matched";
+        PrismRowSet existingRowSet = session.workspace().rowSets().stream()
+                .filter(candidate -> candidate.id().equals(matchedRowSetId))
+                .findFirst()
+                .orElse(null);
+        boolean anyExisting = existingRowSet != null;
+        boolean allExisting = existingRowSet != null;
+        if (existingRowSet != null
+                && !fingerprint.equals(existingRowSet.provenance().get("sarMaterializationFingerprint"))) {
+            throw new ChemOperationException("sar_materialization_conflict",
+                    "Row set " + matchedRowSetId + " already exists with different SAR semantics.");
+        }
+        for (String columnId : columnIds.values()) {
+            PrismColumn existing = session.workspace().table().findColumn(columnId).orElse(null);
+            anyExisting |= existing != null;
+            allExisting &= existing != null;
+            if (existing != null
+                    && !fingerprint.equals(existing.schema().raw().get("sarMaterializationFingerprint"))) {
+                throw new ChemOperationException("sar_materialization_conflict",
+                        "Column " + columnId + " already exists with different SAR semantics.");
+            }
+        }
+        if (anyExisting && !allExisting) {
+            throw new ChemOperationException("partial_sar_materialization",
+                    "Only part of SAR materialization " + outputPrefix
+                            + " exists. Choose a new output_prefix or reload the snapshot.");
+        }
+        if (allExisting) {
+            return new MaterializePrismSarResult(
+                    session.sessionId(), analysisId, outputPrefix, matchedRowSetId, columnIds,
+                    matchedRowIds.size(), request.unmatchedCount(), request.multiAttachmentCount(),
+                    request.ambiguousCount(), true, fingerprint);
+        }
+
+        LinkedHashMap<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put("source", "structurized_scaffold_sar");
+        provenance.put("sessionId", session.sessionId());
+        provenance.put("sarAnalysisId", analysisId);
+        provenance.put("sarSourceRowSetId", sourceRowSetId);
+        provenance.put("sarScaffoldIdcode", scaffoldIdcode);
+        provenance.put("sarMaterializationFingerprint", fingerprint);
+        provenance.put("sarEncoding", SarSubstituentCodec.ENCODING);
+
+        PrismOperationResult.Builder publication = PrismOperationResult.builder()
+                .addRowSet(new PrismRowSet(
+                        matchedRowSetId,
+                        analysisId + " matched scaffold rows",
+                        "Rows matching the scaffold in SAR analysis " + analysisId + ".",
+                        matchedRowIds,
+                        provenance
+                ))
+                .provenance("source", "structurized_scaffold_sar")
+                .provenance("sarAnalysisId", analysisId)
+                .provenance("sarMaterializationFingerprint", fingerprint);
+        for (PrismSarDimensionAssignment dimension : request.dimensions()) {
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(provenance);
+            metadata.put("sarDimensionLabel", dimension.label());
+            metadata.put("sarScaffoldAtom", dimension.scaffoldAtom());
+            if (dimension.scaffoldAtomMap() != null) {
+                metadata.put("sarScaffoldAtomMap", dimension.scaffoldAtomMap());
+            }
+            publication.addColumnByRowId(new RowIdMaterializedColumnData(
+                    new PrismColumnSchema(
+                            columnIds.get(dimension.label()),
+                            PrismColumnType.CATEGORICAL,
+                            "SAR " + dimension.label(),
+                            SarSubstituentCodec.SEMANTIC_TYPE,
+                            "analysis_result",
+                            null,
+                            null,
+                            null,
+                            null,
+                            metadata
+                    ),
+                    dimension.valuesByRowId(),
+                    metadata
+            ));
+        }
+        try {
+            session.runAs(ManagedPrismSessionChangeOrigin.MCP,
+                    () -> session.workspace().applyOperationResult(publication.build()));
+        } catch (PrismOperationException exception) {
+            throw new ChemOperationException("sar_materialization_failed",
+                    "Could not publish SAR analysis " + analysisId + " into Prism.", exception);
+        }
+        return new MaterializePrismSarResult(
+                session.sessionId(), analysisId, outputPrefix, matchedRowSetId, columnIds,
+                matchedRowIds.size(), request.unmatchedCount(), request.multiAttachmentCount(),
+                request.ambiguousCount(), false, fingerprint);
+    }
+
+    private static String sanitizeSarDimensionId(String label) {
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < label.length(); i++) {
+            char ch = label.charAt(i);
+            result.append(Character.isLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_');
+        }
+        String normalized = result.toString().replaceAll("_+", "_");
+        if (normalized.isBlank()) {
+            throw new ChemOperationException("invalid_sar_materialization",
+                    "SAR dimension label must contain at least one letter or digit.");
+        }
+        return normalized;
     }
 
     @Override

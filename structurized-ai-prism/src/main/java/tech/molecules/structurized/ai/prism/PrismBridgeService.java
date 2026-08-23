@@ -124,6 +124,8 @@ public interface PrismBridgeService {
 
     PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId);
 
+    MaterializePrismSarResult materializeSarAnalysis(MaterializePrismSarRequest request);
+
     PrismClusteringSummary clusterRowSet(ClusterPrismRowSetRequest request);
 
     List<PrismAnalysisSummary> listAnalyses(String sessionId);

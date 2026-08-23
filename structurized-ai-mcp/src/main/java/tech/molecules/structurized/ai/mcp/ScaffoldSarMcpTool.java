@@ -10,10 +10,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.prism.CreatePrismRowSetFromRowsRequest;
+import tech.molecules.structurized.ai.prism.MaterializePrismSarRequest;
 import tech.molecules.structurized.ai.prism.PrismBridgeService;
 import tech.molecules.structurized.ai.prism.PrismRowSetColumnSummary;
 import tech.molecules.structurized.ai.prism.PrismRowSetStructureCollection;
 import tech.molecules.structurized.ai.prism.PrismRowStructureEntry;
+import tech.molecules.structurized.ai.prism.PrismSarDimensionAssignment;
+import tech.molecules.structurized.prism.engine.ocl.SarSubstituentCodec;
 import tech.molecules.structurized.scaffolds.CompoundDecompositionRecord;
 import tech.molecules.structurized.scaffolds.CompoundRecord;
 import tech.molecules.structurized.scaffolds.ExitVectorAssignment;
@@ -27,9 +30,13 @@ import tech.molecules.structurized.scaffolds.ScaffoldTemplate;
 import tech.molecules.structurized.transforms.OclStrictMcsProvider;
 
 import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -146,6 +153,100 @@ final class ScaffoldSarMcpTool {
                 dataset.observedExitVectorAtoms.size()
         );
         return output.maybeFile(args, "analyze_prism_scaffold", response, summary, response.observedExitVectors().size());
+    }
+
+    Object materializePrismScaffoldAnalysis(ObjectNode args) {
+        StoredAnalysis analysis = analysis(requiredString(args, "scaffold_analysis_id"));
+        String outputPrefix = requiredString(args, "output_prefix");
+        PrismRowSetStructureCollection current = prism.rowSetStructures(analysis.sessionId(), analysis.rowSetId());
+        String sourceFingerprint = structureFingerprint(analysis.structures());
+        if (!sourceFingerprint.equals(structureFingerprint(current))) {
+            throw new ChemOperationException(
+                    "stale_scaffold_analysis",
+                    "The source structures or row-set membership changed after scaffold analysis "
+                            + analysis.analysisId() + ". Run analyze_prism_scaffold again before materializing."
+            );
+        }
+
+        boolean explicitDimensions = args.hasNonNull("scaffold_atoms")
+                || args.hasNonNull("scaffold_atom")
+                || args.hasNonNull("scaffold_atom_maps")
+                || args.hasNonNull("scaffold_atom_map");
+        List<Integer> atoms = explicitDimensions
+                ? scaffoldAtoms(args, analysis)
+                : analysis.dataset().observedExitVectorAtoms.stream().sorted().toList();
+        if (atoms.isEmpty()) {
+            throw new ChemOperationException(
+                    "empty_sar_dimensions",
+                    "Scaffold analysis " + analysis.analysisId() + " has no observed exit-vector dimensions."
+            );
+        }
+        LinkedHashSet<Integer> uniqueAtoms = new LinkedHashSet<>(atoms);
+        if (uniqueAtoms.size() != atoms.size()) {
+            throw new ChemOperationException("invalid_sar_dimensions", "SAR dimensions must not repeat scaffold atoms.");
+        }
+        for (int atom : atoms) {
+            if (!analysis.dataset().observedExitVectorAtoms.contains(atom)) {
+                throw new ChemOperationException(
+                        "unobserved_sar_dimension",
+                        "Scaffold atom " + atom + " is not an observed exit-vector dimension in analysis "
+                                + analysis.analysisId() + "."
+                );
+            }
+        }
+
+        List<Integer> allObserved = analysis.dataset().observedExitVectorAtoms.stream().sorted().toList();
+        ArrayList<PrismSarDimensionAssignment> dimensions = new ArrayList<>();
+        LinkedHashSet<String> matchedRowIds = new LinkedHashSet<>();
+        int ambiguousCount = 0;
+        for (CompoundDecompositionRecord record : analysis.dataset().records) {
+            if (record.matched) {
+                matchedRowIds.add(analysis.prepared().get(record.compound.index).entry().rowId());
+            }
+            if (!record.ambiguousAtoms.isEmpty()) {
+                ambiguousCount++;
+            }
+        }
+        for (int atom : atoms) {
+            String label = analysis.exitAtomLabels().get(atom);
+            if (label == null || label.isBlank()) {
+                label = "R" + (allObserved.indexOf(atom) + 1);
+            }
+            LinkedHashMap<String, String> valuesByRowId = new LinkedHashMap<>();
+            for (CompoundDecompositionRecord record : analysis.dataset().records) {
+                String rowId = analysis.prepared().get(record.compound.index).entry().rowId();
+                valuesByRowId.put(rowId, encodedSubstituent(record, atom));
+            }
+            dimensions.add(new PrismSarDimensionAssignment(
+                    label,
+                    atom,
+                    atomMapNo(analysis.dataset().template, atom),
+                    valuesByRowId
+            ));
+        }
+
+        String materializationFingerprint = sha256(
+                analysis.analysisId(),
+                sourceFingerprint,
+                analysis.dataset().template.idcode,
+                dimensions.stream()
+                        .map(dimension -> dimension.label() + ":" + dimension.scaffoldAtom() + ":"
+                                + Objects.toString(dimension.scaffoldAtomMap(), ""))
+                        .collect(Collectors.joining("|"))
+        );
+        return prism.materializeSarAnalysis(new MaterializePrismSarRequest(
+                analysis.sessionId(),
+                analysis.analysisId(),
+                analysis.rowSetId(),
+                outputPrefix,
+                analysis.dataset().template.idcode,
+                materializationFingerprint,
+                dimensions,
+                matchedRowIds,
+                analysis.dataset().unmatchedCompoundCount,
+                analysis.dataset().multiAttachmentCompoundCount,
+                ambiguousCount
+        ));
     }
 
     Object getPrismScaffoldProjection(ObjectNode args) {
@@ -393,6 +494,49 @@ final class ScaffoldSarMcpTool {
             return new BucketView("sub:" + assignment.fragmentIdcode, "SUBSTITUENT", label, assignment.fragmentIdcode);
         }
         return new BucketView("none", "UNSUBSTITUTED", "[unsubstituted]", null);
+    }
+
+    private static String encodedSubstituent(CompoundDecompositionRecord record, int atom) {
+        if (!record.matched) {
+            return SarSubstituentCodec.unmatched();
+        }
+        if (record.multiAttachmentAtoms.contains(atom)) {
+            return SarSubstituentCodec.multiAttachment();
+        }
+        if (record.ambiguousAtoms.contains(atom)) {
+            return SarSubstituentCodec.ambiguous();
+        }
+        ExitVectorAssignment assignment = record.assignmentsByScaffoldAtom.get(atom);
+        return assignment == null
+                ? SarSubstituentCodec.unsubstituted()
+                : SarSubstituentCodec.substituent(assignment.fragmentIdcode);
+    }
+
+    private static String structureFingerprint(PrismRowSetStructureCollection structures) {
+        List<PrismRowStructureEntry> sorted = structures.structures().stream()
+                .sorted(Comparator.comparing(PrismRowStructureEntry::rowId))
+                .toList();
+        ArrayList<String> parts = new ArrayList<>(2 + sorted.size() * 2);
+        parts.add(structures.rowSetId());
+        parts.add(Integer.toString(structures.rowCount()));
+        for (PrismRowStructureEntry entry : sorted) {
+            parts.add(entry.rowId());
+            parts.add(entry.smiles());
+        }
+        return sha256(parts.toArray(String[]::new));
+    }
+
+    private static String sha256(String... parts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (String part : parts) {
+                digest.update(Objects.toString(part, "").getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable.", exception);
+        }
     }
 
     private ProjectionContext projectionContext(StoredAnalysis analysis, ProjectionRow row, List<Integer> selectedAtoms) {

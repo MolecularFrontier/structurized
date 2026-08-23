@@ -29,6 +29,7 @@ final class AgentToolTraceSemantics {
     private static final Set<String> PROPOSE = Set.of("add_prism_molecules");
     private static final Set<String> ANALYZE = Set.of(
             "summarize_prism_mmp_transforms", "analyze_prism_graph", "analyze_prism_scaffold",
+            "materialize_prism_scaffold_analysis",
             "get_prism_scaffold_projection", "summarize_prism_row_set_by_columns",
             "summarize_prism_grouping_by_columns", "summarize_selection_by_endpoint",
             "summarize_clusters_by_endpoint", "evaluate_decomposition", "get_decomposition_failures",

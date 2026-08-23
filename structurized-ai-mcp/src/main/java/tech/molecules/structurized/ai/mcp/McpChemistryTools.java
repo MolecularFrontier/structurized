@@ -795,6 +795,13 @@ final class McpChemistryTools {
                 prop("overwrite", "boolean", "Whether to overwrite an existing caller-named artifact."),
                 prop("format", "string", "Artifact format. Only json is supported.")),
                 scaffoldSarTools::analyzePrismScaffold);
+        add(result, "materialize_prism_scaffold_analysis", "Publishes a stored scaffold analysis as sparse SAR substituent columns and a matched row set in the same live Prism session. The result can be referenced directly by sar-1d and sar-2d Prism report blocks.", schema(
+                required("scaffold_analysis_id", "output_prefix"),
+                prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
+                prop("output_prefix", "string", "Namespace for created columns and row set, e.g. sar.series_a creates sar.series_a.R1 and sar.series_a.matched."),
+                arrayProp("scaffold_atoms", "integer", "Optional ordered zero-based scaffold atoms to materialize. Defaults to every observed exit-vector dimension."),
+                arrayProp("scaffold_atom_maps", "integer", "Optional ordered SMILES atom-map numbers to materialize. Defaults to every observed exit-vector dimension.")),
+                scaffoldSarTools::materializePrismScaffoldAnalysis);
         add(result, "get_prism_scaffold_projection", "Returns compact 1D/2D/n-dimensional scaffold substituent buckets with optional Prism column summaries and matched-context diversity metadata.", schema(
                 required("scaffold_analysis_id"),
                 prop("scaffold_analysis_id", "string", "Scaffold analysis ID returned by analyze_prism_scaffold."),
@@ -1277,6 +1284,7 @@ final class McpChemistryTools {
                     Interpretation: cleanMatchedContext=true means all other observed exit-vector positions are constant inside that bucket. otherPositionCount is the number of observed vectors outside the projection. diverseOtherPositionCount counts how many of those vary; diverseOtherPositions lists the main confounders.
                     Buckets: none means the position is unsubstituted; multi means multiple or ambiguous attachments at that scaffold atom are reported jointly; unmatched means the scaffold did not match and is suppressed by default. Use include_unmatched_buckets:true only when needed.
                     Zero-hit diagnosis: a hand scaffold must be a conserved substructure. Common causes are wrong ring size, protonation/aromaticity mismatch, over-specific caps, CF2/CF3 mismatch, or including atoms that are actually variable. Prefer the smallest conserved core that still defines the SAR question; smaller cores often give higher-support exit vectors.
+                    Report/view handoff: call materialize_prism_scaffold_analysis with a namespaced output_prefix after the scaffold and exit vectors look correct. It creates one stable sar_substituent column per requested/observed dimension plus output_prefix.matched. A sar-1d report block then references substituentColumn and the matched row set; sar-2d references rowSubstituent and columnSubstituent. Rerunning the same materialization is idempotent, while changed source structures require a fresh scaffold analysis.
                     Export/follow-up: use export_prism_scaffold_projection for full TSV projection tables outside the MCP context.
                     """;
             case "decomposition_rules" -> """

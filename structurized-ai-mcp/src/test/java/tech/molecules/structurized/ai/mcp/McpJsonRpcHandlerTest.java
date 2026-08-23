@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(98, tools.size());
+        assertEquals(99, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -111,6 +111,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "mine_prism_similarity_graph"));
         assertTrue(hasTool(tools, "discover_prism_scaffolds"));
         assertTrue(hasTool(tools, "analyze_prism_scaffold"));
+        assertTrue(hasTool(tools, "materialize_prism_scaffold_analysis"));
         assertTrue(hasTool(tools, "get_prism_scaffold_projection"));
         assertTrue(hasTool(tools, "create_prism_scaffold_bucket_row_set"));
         assertTrue(hasTool(tools, "export_prism_scaffold_projection"));
@@ -1112,6 +1113,25 @@ class McpJsonRpcHandlerTest {
         assertTrue(scaffoldGuide.contains("discover_prism_scaffolds"));
         assertTrue(scaffoldGuide.contains("several endpoints"));
         assertTrue(scaffoldGuide.contains("Zero-hit diagnosis"));
+        JsonNode materialized = call(handler, request(8, "materialize_prism_scaffold_analysis", """
+                {"scaffold_analysis_id":"benzene_sar","output_prefix":"sar.benzene","scaffold_atom_maps":[1]}
+                """));
+        assertEquals("sar.benzene.matched",
+                materialized.at("/result/structuredContent/matchedRowSetId").asText());
+        assertEquals("sar.benzene.phenyl_exit",
+                materialized.at("/result/structuredContent/dimensionColumnIds/phenyl_exit").asText());
+        assertEquals(2, materialized.at("/result/structuredContent/matchedCount").asInt());
+        assertFalse(materialized.at("/result/structuredContent/reused").asBoolean());
+
+        JsonNode reused = call(handler, request(9, "materialize_prism_scaffold_analysis", """
+                {"scaffold_analysis_id":"benzene_sar","output_prefix":"sar.benzene","scaffold_atom_maps":[1]}
+                """));
+        assertTrue(reused.at("/result/structuredContent/reused").asBoolean());
+        JsonNode columns = call(handler, request(10, "list_prism_columns", """
+                {"session_id":"sar_demo"}
+                """));
+        assertTrue(columns.at("/result/structuredContent").toString().contains("sar.benzene.phenyl_exit"));
+        assertTrue(scaffoldGuide.contains("materialize_prism_scaffold_analysis"));
     }
 
     @Test
