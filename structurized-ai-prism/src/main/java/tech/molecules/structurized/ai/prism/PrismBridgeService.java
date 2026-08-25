@@ -134,6 +134,10 @@ public interface PrismBridgeService {
 
     PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId);
 
+    default PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId, String structureColumnId) {
+        return rowSetStructures(sessionId, rowSetId);
+    }
+
     MaterializePrismSarResult materializeSarAnalysis(MaterializePrismSarRequest request);
 
     PrismClusteringSummary clusterRowSet(ClusterPrismRowSetRequest request);

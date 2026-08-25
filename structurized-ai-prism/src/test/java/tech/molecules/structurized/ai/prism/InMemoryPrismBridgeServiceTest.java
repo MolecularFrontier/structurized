@@ -1,4 +1,11 @@
 package tech.molecules.structurized.ai.prism;
+import com.actelion.research.chem.Canonizer;
+import com.actelion.research.chem.SmilesParser;
+import com.actelion.research.chem.StereoMolecule;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -19,12 +26,15 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -122,6 +132,8 @@ class InMemoryPrismBridgeServiceTest {
         assertEquals(3, opened.totalRowCount());
         assertEquals("example_pack", info.summary().sessionId());
         assertTrue(columns.stream().anyMatch(column -> column.columnId().equals("smiles")));
+        assertTrue(columns.stream().filter(column -> column.columnId().equals("pIC50"))
+                .anyMatch(column -> column.raw().containsKey("predictionWorkflowKey")));
         assertTrue(description.structureColumns().stream().anyMatch(column -> column.columnId().equals("smiles")));
         assertTrue(description.endpointColumns().stream().anyMatch(column -> column.columnId().equals("pIC50")));
         assertTrue(description.semanticTypeCounts().containsKey("chemical_structure"));
@@ -130,6 +142,36 @@ class InMemoryPrismBridgeServiceTest {
         assertTrue(members.members().getFirst().fields().containsKey("prism.column.smiles"));
         assertEquals(3, structures.structureCount());
         assertEquals(1, potent.rowCount());
+    }
+
+    @Test
+    void usesIdcodePrimaryStructuresAcrossExtractionClusteringAndMaterialization() throws Exception {
+        Path pack = idcodePrimaryPrismPack();
+        TestContext ctx = context();
+        ctx.prism.openPack(new OpenPrismPackRequest(pack, "idcode_pack", "IDCode pack"));
+
+        PrismRowSetStructureCollection primary = ctx.prism.rowSetStructures("idcode_pack", "all");
+        PrismRowSetStructureCollection smilesOverride = ctx.prism.rowSetStructures(
+                "idcode_pack", "all", "smiles");
+        PrismClusteringSummary clustered = ctx.prism.clusterRowSet(new ClusterPrismRowSetRequest(
+                "idcode_pack", "all", "idcode_clusters", null,
+                null, 1.0, 2, false, null
+        ));
+        MaterializePrismSubjectSetResult materialized = ctx.prism.materializeSubjectSet(
+                new MaterializePrismSubjectSetRequest(
+                        "idcode_pack", "all", "idcode_repository", null, null));
+
+        assertEquals("structure_idcode", primary.structureColumnId());
+        assertEquals("idcode", primary.structureFormat());
+        assertEquals(3, primary.structureCount());
+        assertTrue(primary.structures().stream().allMatch(entry -> !entry.smiles().isBlank()));
+        assertEquals("smiles", smilesOverride.structureColumnId());
+        assertEquals("smiles", smilesOverride.structureFormat());
+        assertEquals(3, clustered.inputMoleculeCount());
+        assertEquals("structure_idcode", clustered.analysis().details().get("structureColumnId"));
+        assertEquals("idcode", clustered.analysis().details().get("structureFormat"));
+        assertEquals(3, materialized.structuresImported());
+        assertEquals(0, materialized.invalidSmiles());
     }
 
     @Test
@@ -784,6 +826,58 @@ class InMemoryPrismBridgeServiceTest {
                 new OclStructureSearchService(repositories),
                 registry
         );
+    }
+
+    private Path idcodePrimaryPrismPack() throws Exception {
+        Path source = examplePrismPack();
+        Path target = tempDir.resolve("idcode-primary.prismpack");
+        try (var paths = Files.walk(source)) {
+            for (Path path : paths.toList()) {
+                Path destination = target.resolve(source.relativize(path).toString());
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(destination);
+                } else {
+                    Files.copy(path, destination);
+                }
+            }
+        }
+
+        ObjectMapper mapper = new ObjectMapper();
+        Path schemaPath = target.resolve("schema/dataframe.schema.json");
+        ObjectNode schema = (ObjectNode) mapper.readTree(schemaPath.toFile());
+        ArrayNode columns = (ArrayNode) schema.path("columns");
+        ((ObjectNode) columns.get(1)).put("role", "auxiliary_structure");
+        ObjectNode idcodeColumn = mapper.createObjectNode();
+        idcodeColumn.put("name", "structure_idcode");
+        idcodeColumn.put("type", "string");
+        idcodeColumn.put("semanticType", "chemical_structure");
+        idcodeColumn.put("displayName", "Structure");
+        idcodeColumn.put("role", "primary_structure");
+        idcodeColumn.put("structureFormat", "idcode");
+        columns.insert(1, idcodeColumn);
+        mapper.writerWithDefaultPrettyPrinter().writeValue(schemaPath.toFile(), schema);
+
+        Path dataframePath = target.resolve("data/dataframe.tsv");
+        List<String> sourceRows = Files.readAllLines(dataframePath);
+        ArrayList<String> convertedRows = new ArrayList<>();
+        convertedRows.add(sourceRows.getFirst().replace(
+                "compound_id\tsmiles", "compound_id\tstructure_idcode\tsmiles"));
+        for (String sourceRow : sourceRows.subList(1, sourceRows.size())) {
+            String[] cells = sourceRow.split("\\t", -1);
+            StereoMolecule molecule = new StereoMolecule();
+            new SmilesParser().parse(molecule, cells[1]);
+            String idcode = new Canonizer(molecule).getIDCode();
+            convertedRows.add(cells[0] + "\t" + idcode + "\t"
+                    + String.join("\t", Arrays.copyOfRange(cells, 1, cells.length)));
+        }
+        Files.write(dataframePath, convertedRows);
+
+        Path moleculesPath = target.resolve("semantics/molecules.json");
+        ObjectNode molecules = (ObjectNode) mapper.readTree(moleculesPath.toFile());
+        molecules.put("primaryStructureColumn", "structure_idcode");
+        molecules.put("structureFormat", "idcode");
+        mapper.writerWithDefaultPrettyPrinter().writeValue(moleculesPath.toFile(), molecules);
+        return target;
     }
 
     private static Path examplePrismPack() throws Exception {

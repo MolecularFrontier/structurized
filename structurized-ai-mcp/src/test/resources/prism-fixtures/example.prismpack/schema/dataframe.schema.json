@@ -27,7 +27,8 @@
       "semanticType": "endpoint_value",
       "displayName": "pIC50",
       "endpointId": "prism:endpoint:pIC50_example",
-      "direction": "higher_is_better"
+      "direction": "higher_is_better",
+      "predictionWorkflowKey": null
     },
     {
       "name": "clogP",

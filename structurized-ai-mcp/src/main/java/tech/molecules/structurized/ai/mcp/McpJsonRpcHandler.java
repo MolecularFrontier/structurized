@@ -21,11 +21,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class McpJsonRpcHandler {
+    private static final Logger LOGGER = Logger.getLogger(McpJsonRpcHandler.class.getName());
     private static final String PROTOCOL_VERSION = "2024-11-05";
+    private static final String SERVER_VERSION = loadServerVersion();
 
     private final ObjectMapper mapper;
     private final McpChemistryTools chemistryTools;
@@ -74,8 +79,9 @@ public final class McpJsonRpcHandler {
         if (!request.isObject() || !request.hasNonNull("method") || !request.get("method").isTextual()) {
             return mapper.writeValueAsString(error(id, -32600, "Invalid Request", null));
         }
+        String method = request.get("method").asText();
         try {
-            Object result = handleRequest(request.get("method").asText(), objectParams(request));
+            Object result = handleRequest(method, objectParams(request));
             return mapper.writeValueAsString(success(id, result));
         } catch (MethodNotFoundException e) {
             return mapper.writeValueAsString(error(id, -32601, e.getMessage(), errorData("method_not_found", e.getMessage())));
@@ -84,7 +90,10 @@ public final class McpJsonRpcHandler {
         } catch (IllegalArgumentException e) {
             return mapper.writeValueAsString(error(id, -32602, e.getMessage(), errorData("invalid_arguments", e.getMessage())));
         } catch (Exception e) {
-            return mapper.writeValueAsString(error(id, -32603, "Internal error", errorData("internal_chemistry_error", e.getMessage())));
+            String operation = requestOperation(method, request);
+            LOGGER.log(Level.SEVERE, "Unexpected MCP failure for request " + id + " while handling " + operation, e);
+            return mapper.writeValueAsString(error(id, -32603, "Internal error",
+                    errorData("internal_chemistry_error", internalErrorMessage(operation, e))));
         }
     }
 
@@ -135,7 +144,7 @@ public final class McpJsonRpcHandler {
         capabilities.put("tools", Map.of());
         Map<String, Object> serverInfo = new LinkedHashMap<>();
         serverInfo.put("name", "structurized-ai-mcp");
-        serverInfo.put("version", "0.3.6");
+        serverInfo.put("version", SERVER_VERSION);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("protocolVersion", PROTOCOL_VERSION);
         result.put("capabilities", capabilities);
@@ -255,6 +264,41 @@ public final class McpJsonRpcHandler {
         data.put("code", code == null ? "internal_chemistry_error" : code);
         data.put("message", message == null ? "" : message);
         return data;
+    }
+    private static String requestOperation(String method, JsonNode request) {
+        if (!"tools/call".equals(method)) {
+            return method;
+        }
+        JsonNode toolName = request.at("/params/name");
+        return toolName.isTextual() && !toolName.asText().isBlank()
+                ? "tool " + toolName.asText()
+                : method;
+    }
+
+    static String internalErrorMessage(String operation, Exception exception) {
+        String message = exception.getMessage();
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+        return "Unexpected " + exception.getClass().getSimpleName() + " while handling " + operation + ".";
+    }
+
+    private static String loadServerVersion() {
+        Properties properties = new Properties();
+        try (InputStream input = McpJsonRpcHandler.class.getResourceAsStream("/structurized-ai-mcp.properties")) {
+            if (input == null) {
+                return "development";
+            }
+            properties.load(input);
+            String version = properties.getProperty("version");
+            if (version == null || version.isBlank() || version.contains("${")) {
+                return "development";
+            }
+            return version.trim();
+        } catch (Exception exception) {
+            LOGGER.log(Level.WARNING, "Could not load Structurized MCP version metadata", exception);
+            return "development";
+        }
     }
     private static final class MethodNotFoundException extends Exception {
         private MethodNotFoundException(String message) {

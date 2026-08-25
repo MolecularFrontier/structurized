@@ -9,9 +9,23 @@ public record PrismRowSetStructureCollection(
         int rowCount,
         int structureCount,
         int skippedRows,
-        List<PrismRowStructureEntry> structures
+        List<PrismRowStructureEntry> structures,
+        String structureColumnId,
+        String structureFormat
 ) {
     public PrismRowSetStructureCollection {
         structures = structures == null ? List.of() : List.copyOf(structures);
+    }
+
+    public PrismRowSetStructureCollection(
+            String sessionId,
+            String rowSetId,
+            long revision,
+            int rowCount,
+            int structureCount,
+            int skippedRows,
+            List<PrismRowStructureEntry> structures
+    ) {
+        this(sessionId, rowSetId, revision, rowCount, structureCount, skippedRows, structures, null, null);
     }
 }

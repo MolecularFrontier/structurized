@@ -11,6 +11,6 @@ public record PredictionContext(
 ) {
     public PredictionContext {
         endpoints = endpoints == null ? List.of() : List.copyOf(endpoints);
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        metadata = NullSafeMaps.immutableCopy(metadata);
     }
 }

@@ -18,6 +18,6 @@ public record PrismColumnSummary(
         Map<String, Object> raw
 ) {
     public PrismColumnSummary {
-        raw = raw == null ? Map.of() : Map.copyOf(raw);
+        raw = NullSafeMaps.immutableCopy(raw);
     }
 }

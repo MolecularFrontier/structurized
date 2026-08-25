@@ -207,7 +207,8 @@ final class McpChemistryTools {
                 requiredString(args, "session_id"),
                 requiredString(args, "row_set_id"),
                 optionalString(args, "repository_id", null),
-                optionalString(args, "label", null)));
+                optionalString(args, "label", null),
+                optionalString(args, "structure_column_id", null)));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessionId", materialized.datasetId());
         result.put("rowSetId", materialized.subjectSetId());
@@ -656,8 +657,12 @@ final class McpChemistryTools {
         add(result, "get_prism_row_set_structures", "Returns lazy structure entries for a Prism session row set without copying them into a repository.", schema(
                 required("session_id", "row_set_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
-                prop("row_set_id", "string", "Prism row set ID.")),
-                args -> prism.rowSetStructures(requiredString(args, "session_id"), requiredString(args, "row_set_id")));
+                prop("row_set_id", "string", "Prism row set ID."),
+                prop("structure_column_id", "string", "Optional bare runtime structure column ID. Defaults to the declared primary structure column.")),
+                args -> prism.rowSetStructures(
+                        requiredString(args, "session_id"),
+                        requiredString(args, "row_set_id"),
+                        optionalString(args, "structure_column_id", null)));
         add(result, "list_prism_groupings", "Lists reusable row groupings published in one managed Prism session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
@@ -784,6 +789,7 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID. Defaults to all."),
+                prop("structure_column_id", "string", "Optional bare runtime structure column ID. Defaults to the declared primary structure column."),
                 prop("discovery_id", "string", "Optional reusable scaffold discovery ID."),
                 prop("neighbor_count", "integer", "Nearest-neighbor count for scaffold discovery. Defaults to 4."),
                 prop("min_neighbor_similarity", "number", "Minimum FFP512 neighbor similarity. Defaults to 0.15."),
@@ -802,6 +808,7 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID. Defaults to all."),
+                prop("structure_column_id", "string", "Optional bare runtime structure column ID. Candidate-based analysis must reuse its discovery's structure column."),
                 prop("scaffold_smiles", "string", "Concrete scaffold SMILES substructure. Required unless discovery_id/candidate_id is supplied. Atom maps may label scaffold atoms, e.g. [cH:1]1ccc(N[C:2](=O)N)cc1."),
                 prop("discovery_id", "string", "Stored scaffold discovery ID."),
                 prop("candidate_id", "string", "Candidate ID from discover_prism_scaffolds, e.g. scaffold_1."),
@@ -833,7 +840,7 @@ final class McpChemistryTools {
                 prop("offset", "integer", "Zero-based bucket offset."),
                 prop("limit", "integer", "Maximum buckets returned. Defaults to 50."),
                 prop("example_limit", "integer", "Maximum example row IDs per bucket. Defaults to 3."),
-                arrayProp("column_ids", "string", "Optional Prism runtime columns summarized for each returned bucket."),
+                arrayProp("column_ids", "string", "Optional bare runtime Prism column IDs (schema column names such as solFaSSIF); do not use prism.column.* row-field keys or endpoint IDs."),
                 prop("threshold", "number", "Optional numeric threshold for hit counts/rates in column summaries."),
                 prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
                 prop("top_values_limit", "integer", "Top categorical values per column summary. Defaults to 5."),
@@ -919,7 +926,7 @@ final class McpChemistryTools {
                 required("session_id", "row_set_id", "column_ids"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID."),
-                arrayProp("column_ids", "string", "Runtime Prism column IDs to summarize."),
+                arrayProp("column_ids", "string", "Bare runtime Prism column IDs (schema column names such as solFaSSIF); do not use prism.column.* row-field keys or endpoint IDs."),
                 prop("threshold", "number", "Optional numeric threshold applied to numeric columns."),
                 prop("threshold_direction", "string", "gte or lte. Defaults to gte."),
                 prop("top_values_limit", "integer", "Maximum top values for categorical/text columns. Defaults to 10."),
@@ -932,7 +939,7 @@ final class McpChemistryTools {
                 required("session_id", "grouping_id", "column_ids"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("grouping_id", "string", "Prism grouping ID."),
-                arrayProp("column_ids", "string", "Runtime Prism column IDs to summarize within each group."),
+                arrayProp("column_ids", "string", "Bare runtime Prism column IDs (schema column names such as solFaSSIF); do not use prism.column.* row-field keys or endpoint IDs."),
                 prop("include_singletons", "boolean", "Whether to include singleton groups. Defaults to false."),
                 prop("offset", "integer", "Zero-based group offset after filtering and size sorting. Defaults to 0."),
                 prop("limit", "integer", "Maximum groups returned. Defaults to 50."),
@@ -948,6 +955,7 @@ final class McpChemistryTools {
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Source Prism row set. Defaults to all."),
+                prop("structure_column_id", "string", "Optional bare runtime structure column ID. Defaults to the declared primary structure column."),
                 prop("analysis_id", "string", "Optional unique analysis ID."),
                 prop("label", "string", "Optional analysis and column label."),
                 prop("descriptor", "string", "Descriptor name. Defaults to skelspheres."),
@@ -962,7 +970,8 @@ final class McpChemistryTools {
                         optionalString(args, "descriptor", null),
                         optionalDouble(args, "threshold", null),
                         optionalInt(args, "max_cross_neighbors", 5),
-                        optionalNullableBoolean(args, "publish_columns"))));
+                        optionalNullableBoolean(args, "publish_columns"),
+                        optionalString(args, "structure_column_id", null))));
         add(result, "list_prism_analyses", "Lists provider-managed detailed analysis artifacts associated with one Prism session.", schema(
                 required("session_id"),
                 prop("session_id", "string", "Managed Prism session ID.")),
@@ -1026,6 +1035,7 @@ final class McpChemistryTools {
                 required("session_id", "row_set_id"),
                 prop("session_id", "string", "Managed Prism session ID."),
                 prop("row_set_id", "string", "Prism row set ID."),
+                prop("structure_column_id", "string", "Optional bare runtime structure column ID. Defaults to the declared primary structure column."),
                 prop("repository_id", "string", "Optional target AI repository ID."),
                 prop("label", "string", "Optional target repository label.")),
                 this::materializePrismRowSet);

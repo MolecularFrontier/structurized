@@ -66,10 +66,11 @@ final class ScaffoldSarMcpTool {
     Object discoverPrismScaffolds(ObjectNode args) {
         String sessionId = requiredString(args, "session_id");
         String rowSetId = optionalString(args, "row_set_id", "all");
+        String structureColumnId = optionalString(args, "structure_column_id", null);
         int offset = Math.max(0, optionalInt(args, "offset", 0));
         int limit = safeLimit(args, "limit", 20);
         int exampleLimit = safeLimit(args, "example_limit", 3);
-        PrismRowSetStructureCollection structures = prism.rowSetStructures(sessionId, rowSetId);
+        PrismRowSetStructureCollection structures = prism.rowSetStructures(sessionId, rowSetId, structureColumnId);
         List<PreparedStructure> prepared = preparedStructures(structures);
         if (prepared.size() < 2) {
             throw new ChemOperationException("insufficient_scaffold_discovery_structures", "Scaffold discovery requires at least two usable structures.");
@@ -93,6 +94,8 @@ final class ScaffoldSarMcpTool {
                 discoveryId,
                 sessionId,
                 rowSetId,
+                structures.structureColumnId(),
+                structures.structureFormat(),
                 structures.rowCount(),
                 structures.structureCount(),
                 structures.skippedRows(),
@@ -120,12 +123,13 @@ final class ScaffoldSarMcpTool {
     Object analyzePrismScaffold(ObjectNode args) {
         String sessionId = requiredString(args, "session_id");
         String rowSetId = optionalString(args, "row_set_id", "all");
+        String structureColumnId = structureColumnForAnalysis(args);
         int topSubstituentLimit = safeLimit(args, "top_substituent_limit", 5);
         int exampleLimit = safeLimit(args, "example_limit", 3);
         boolean includeUnmatchedBuckets = optionalBoolean(args, "include_unmatched_buckets", false);
         ScaffoldTemplate template = scaffoldTemplate(args);
         Map<Integer, String> exitAtomLabels = exitAtomLabels(args, template);
-        PrismRowSetStructureCollection structures = prism.rowSetStructures(sessionId, rowSetId);
+        PrismRowSetStructureCollection structures = prism.rowSetStructures(sessionId, rowSetId, structureColumnId);
         List<PreparedStructure> prepared = preparedStructures(structures);
         if (prepared.isEmpty()) {
             throw new ChemOperationException("empty_scaffold_analysis", "No usable structures found in row set " + rowSetId + ".");
@@ -158,7 +162,11 @@ final class ScaffoldSarMcpTool {
     Object materializePrismScaffoldAnalysis(ObjectNode args) {
         StoredAnalysis analysis = analysis(requiredString(args, "scaffold_analysis_id"));
         String outputPrefix = requiredString(args, "output_prefix");
-        PrismRowSetStructureCollection current = prism.rowSetStructures(analysis.sessionId(), analysis.rowSetId());
+        PrismRowSetStructureCollection current = prism.rowSetStructures(
+                analysis.sessionId(),
+                analysis.rowSetId(),
+                analysis.structures().structureColumnId()
+        );
         String sourceFingerprint = structureFingerprint(analysis.structures());
         if (!sourceFingerprint.equals(structureFingerprint(current))) {
             throw new ChemOperationException(
@@ -350,6 +358,24 @@ final class ScaffoldSarMcpTool {
         );
     }
 
+    private String structureColumnForAnalysis(ObjectNode args) {
+        String requested = optionalString(args, "structure_column_id", null);
+        String discoveryId = optionalString(args, "discovery_id", null);
+        if (discoveryId == null || discoveryId.isBlank()) {
+            return requested;
+        }
+        StoredDiscovery discovery = discovery(discoveryId);
+        String stored = discovery.structures().structureColumnId();
+        if (requested != null && !requested.isBlank() && !requested.trim().equals(stored)) {
+            throw new ChemOperationException(
+                    "structure_column_mismatch",
+                    "Scaffold discovery " + discoveryId + " used structure column " + stored
+                            + "; analyze_prism_scaffold cannot use " + requested.trim() + "."
+            );
+        }
+        return stored;
+    }
+
     private ScaffoldTemplate scaffoldTemplate(ObjectNode args) {
         String discoveryId = optionalString(args, "discovery_id", null);
         String candidateId = optionalString(args, "candidate_id", null);
@@ -399,6 +425,8 @@ final class ScaffoldSarMcpTool {
                 analysis.analysisId(),
                 analysis.sessionId(),
                 analysis.rowSetId(),
+                analysis.structures().structureColumnId(),
+                analysis.structures().structureFormat(),
                 scaffoldSmiles(dataset.template),
                 mappedScaffoldSmiles(dataset.template),
                 dataset.template.idcode,
@@ -516,8 +544,10 @@ final class ScaffoldSarMcpTool {
         List<PrismRowStructureEntry> sorted = structures.structures().stream()
                 .sorted(Comparator.comparing(PrismRowStructureEntry::rowId))
                 .toList();
-        ArrayList<String> parts = new ArrayList<>(2 + sorted.size() * 2);
+        ArrayList<String> parts = new ArrayList<>(4 + sorted.size() * 2);
         parts.add(structures.rowSetId());
+        parts.add(structures.structureColumnId());
+        parts.add(structures.structureFormat());
         parts.add(Integer.toString(structures.rowCount()));
         for (PrismRowStructureEntry entry : sorted) {
             parts.add(entry.rowId());
@@ -941,6 +971,8 @@ final class ScaffoldSarMcpTool {
             String discoveryId,
             String sessionId,
             String rowSetId,
+            String structureColumnId,
+            String structureFormat,
             int sourceRowCount,
             int structureCount,
             int skippedRows,
@@ -973,6 +1005,8 @@ final class ScaffoldSarMcpTool {
             String scaffoldAnalysisId,
             String sessionId,
             String rowSetId,
+            String structureColumnId,
+            String structureFormat,
             String scaffoldSmiles,
             String mappedScaffoldSmiles,
             String scaffoldIdcode,

@@ -1,5 +1,8 @@
 package tech.molecules.structurized.ai.prism;
 
+import com.actelion.research.chem.IsomericSmilesCreator;
+import com.actelion.research.chem.StereoMolecule;
+
 import tech.molecules.structurized.ai.model.ChemOperationException;
 import tech.molecules.structurized.ai.model.CreateRepositoryRequest;
 import tech.molecules.structurized.ai.model.RegisterStructureRequest;
@@ -38,6 +41,8 @@ import tech.molecules.structurized.prism.engine.live.PrismLiveExecutionMode;
 import tech.molecules.structurized.prism.engine.live.PrismLiveSuccessfulResult;
 import tech.molecules.structurized.prism.engine.TextPatternMode;
 import tech.molecules.structurized.prism.engine.ocl.OclMoleculeDocumentCodec;
+import tech.molecules.structurized.prism.engine.ocl.OclStructureFormat;
+import tech.molecules.structurized.prism.engine.ocl.OclStructureParser;
 import tech.molecules.structurized.prism.engine.ocl.SarSubstituent;
 import tech.molecules.structurized.prism.engine.ocl.SarSubstituentCodec;
 import tech.molecules.structurized.prism.io.PrismTsvDatasetLoader;
@@ -1435,13 +1440,32 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
 
     @Override
     public synchronized PrismRowSetStructureCollection rowSetStructures(String sessionId, String rowSetId) {
+        return rowSetStructures(sessionId, rowSetId, null);
+    }
+
+    @Override
+    public synchronized PrismRowSetStructureCollection rowSetStructures(
+            String sessionId,
+            String rowSetId,
+            String structureColumnId
+    ) {
         ManagedPrismSession session = session(sessionId);
         PrismRowSet rowSet = rowSet(session, rowSetId);
+        ResolvedStructureColumn resolved = resolveStructureColumn(session, structureColumnId);
         ArrayList<PrismRowStructureEntry> structures = new ArrayList<>();
         int skipped = 0;
         for (String rowId : rowSet.rowIds()) {
+            int physicalRow = session.workspace().physicalRowForRowId(rowId)
+                    .orElseThrow(() -> new ChemOperationException(
+                            "prism_row_not_found", "Prism row " + rowId + " does not exist."));
             PrismRowMember member = rowMember(session, rowId);
-            if (member.smiles() == null || member.smiles().isBlank()) {
+            String smiles;
+            try {
+                smiles = normalizedSmiles(session, physicalRow, resolved);
+            } catch (RuntimeException exception) {
+                smiles = resolved.column().formattedValueAt(physicalRow);
+            }
+            if (smiles == null || smiles.isBlank()) {
                 skipped++;
                 continue;
             }
@@ -1450,7 +1474,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                     member.subjectId(),
                     member.structureId(),
                     member.subjectId(),
-                    member.smiles(),
+                    smiles,
                     member.fields()
             ));
         }
@@ -1461,7 +1485,9 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 rowSet.rowIds().size(),
                 structures.size(),
                 skipped,
-                structures
+                structures,
+                resolved.column().id(),
+                resolved.format().name().toLowerCase(Locale.ROOT)
         );
     }
 
@@ -1633,7 +1659,8 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 ? "all"
                 : request.rowSetId().trim();
         PrismRowSet sourceRowSet = rowSet(session, rowSetId);
-        PrismRowSetStructureCollection structures = rowSetStructures(session.sessionId(), sourceRowSet.id());
+        PrismRowSetStructureCollection structures = rowSetStructures(
+                session.sessionId(), sourceRowSet.id(), request.structureColumnId());
         return clustering.cluster(session, sourceRowSet, structures, request);
     }
 
@@ -1788,6 +1815,7 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                 ? defaultRepositoryLabel(loaded, subjectSetId)
                 : request.label().trim();
 
+        ResolvedStructureColumn resolved = resolveStructureColumn(loaded, request.structureColumnId());
         repositories.createRepository(new CreateRepositoryRequest(repositoryId, label, prismRepositoryDescription(loaded, subjectSetId), true));
 
         int missingSmiles = 0;
@@ -1796,13 +1824,18 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         List<PrismSkippedSubject> skipped = new ArrayList<>();
         for (String rowId : rowIds) {
             int physicalRow = loaded.workspace().physicalRowForRowId(rowId).orElseThrow();
-            String smiles = structureValue(loaded, physicalRow);
-            if (smiles == null || smiles.isBlank()) {
+            if (resolved.column().isMissing(physicalRow)) {
                 missingSmiles++;
                 skipped.add(new PrismSkippedSubject(rowId, "missing_smiles", "Row has no structure."));
                 continue;
             }
             try {
+                String smiles = normalizedSmiles(loaded, physicalRow, resolved);
+                if (smiles == null || smiles.isBlank()) {
+                    missingSmiles++;
+                    skipped.add(new PrismSkippedSubject(rowId, "missing_smiles", "Row has no usable structure."));
+                    continue;
+                }
                 repositories.registerStructure(new RegisterStructureRequest(
                         smiles,
                         repositoryId,
@@ -2135,7 +2168,9 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
                     return session.workspace().table().findColumn(id)
                             .orElseThrow(() -> new ChemOperationException(
                                     "prism_column_not_found",
-                                    "Prism column " + id + " does not exist."
+                                    "Prism column " + id + " does not exist. Use a bare runtime column ID "
+                                            + "(for example solFaSSIF), not a prism.column.* row-field key or endpoint ID; "
+                                            + "call list_prism_columns for authoritative IDs."
                             ));
                 })
                 .toList();
@@ -2309,16 +2344,95 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
     }
 
     private String structureValue(ManagedPrismSession session, int physicalRow) {
-        for (PrismColumn column : session.workspace().table().columns()) {
-            PrismColumnSchema schema = column.schema();
-            if ("chemical_structure".equals(schema.semanticType()) || "primary_structure".equals(schema.role())) {
-                Object value = column.valueAt(physicalRow);
-                if (value != null && !value.toString().isBlank()) {
-                    return value.toString();
-                }
-            }
+        ResolvedStructureColumn resolved;
+        try {
+            resolved = resolveStructureColumn(session, null);
+        } catch (RuntimeException exception) {
+            return null;
         }
-        return firstStringValue(session, physicalRow, "smiles", "structure");
+        try {
+            return normalizedSmiles(session, physicalRow, resolved);
+        } catch (RuntimeException exception) {
+            return resolved.column().isMissing(physicalRow)
+                    ? null
+                    : resolved.column().formattedValueAt(physicalRow);
+        }
+    }
+
+    private ResolvedStructureColumn resolveStructureColumn(
+            ManagedPrismSession session,
+            String requestedColumnId
+    ) {
+        PrismColumn column;
+        if (requestedColumnId != null && !requestedColumnId.isBlank()) {
+            String normalizedId = requestedColumnId.trim();
+            column = session.workspace().table().findColumn(normalizedId)
+                    .orElseThrow(() -> new ChemOperationException(
+                            "invalid_structure_column",
+                            "Prism column " + normalizedId + " does not exist."
+                    ));
+            if (!isStructureColumn(column)) {
+                throw new ChemOperationException(
+                        "invalid_structure_column",
+                        "Prism column " + normalizedId + " is not a chemical structure column."
+                );
+            }
+        } else {
+            column = session.workspace().table().columns().stream()
+                    .filter(candidate -> "primary_structure".equals(candidate.schema().role()))
+                    .findFirst()
+                    .orElseGet(() -> session.workspace().table().columns().stream()
+                            .filter(InMemoryPrismBridgeService::isStructureColumn)
+                            .findFirst()
+                            .orElseThrow(() -> new ChemOperationException(
+                                    "missing_structure_column",
+                                    "No chemical structure column is available in Prism session "
+                                            + session.sessionId() + "."
+                            )));
+        }
+
+        OclStructureFormat format = OclStructureFormat.fromMetadata(column.schema().structureFormat());
+        PrismColumn coordinates = format == OclStructureFormat.IDCODE
+                ? session.workspace().table().columns().stream()
+                        .filter(InMemoryPrismBridgeService::isCoordinatesColumn)
+                        .findFirst()
+                        .orElse(null)
+                : null;
+        return new ResolvedStructureColumn(column, coordinates, format);
+    }
+
+    private String normalizedSmiles(
+            ManagedPrismSession session,
+            int physicalRow,
+            ResolvedStructureColumn resolved
+    ) {
+        PrismColumn column = resolved.column();
+        if (column.isMissing(physicalRow)) {
+            return null;
+        }
+        String structureText = column.formattedValueAt(physicalRow);
+        String coordinatesText = resolved.coordinates() == null || resolved.coordinates().isMissing(physicalRow)
+                ? null
+                : resolved.coordinates().formattedValueAt(physicalRow);
+        StereoMolecule molecule = new OclStructureParser().parse(
+                structureText,
+                coordinatesText,
+                resolved.format()
+        );
+        return molecule == null ? null : IsomericSmilesCreator.createSmiles(molecule);
+    }
+
+    private static boolean isStructureColumn(PrismColumn column) {
+        PrismColumnSchema schema = column.schema();
+        return column.type() == PrismColumnType.MOLECULE
+                || "chemical_structure".equals(schema.semanticType())
+                || "primary_structure".equals(schema.role());
+    }
+
+    private static boolean isCoordinatesColumn(PrismColumn column) {
+        PrismColumnSchema schema = column.schema();
+        return "chemical_structure_coordinates".equals(schema.semanticType())
+                || "structure_coordinates".equals(schema.role());
     }
 
     private Map<String, String> rowFields(ManagedPrismSession session, int physicalRow) {
@@ -2960,5 +3074,10 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         }
     }
 
+    private record ResolvedStructureColumn(
+            PrismColumn column,
+            PrismColumn coordinates,
+            OclStructureFormat format
+    ) {}
     private record MaterializationMapping(String datasetId, String subjectSetId) {}
 }

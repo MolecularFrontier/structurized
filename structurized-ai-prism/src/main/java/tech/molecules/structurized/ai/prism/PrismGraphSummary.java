@@ -17,6 +17,6 @@ public record PrismGraphSummary(
         Map<String, Object> metadata
 ) {
     public PrismGraphSummary {
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        metadata = NullSafeMaps.immutableCopy(metadata);
     }
 }

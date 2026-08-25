@@ -11,6 +11,6 @@ public record PrismRowSetSummary(
         Map<String, Object> provenance
 ) {
     public PrismRowSetSummary {
-        provenance = provenance == null ? Map.of() : Map.copyOf(provenance);
+        provenance = NullSafeMaps.immutableCopy(provenance);
     }
 }

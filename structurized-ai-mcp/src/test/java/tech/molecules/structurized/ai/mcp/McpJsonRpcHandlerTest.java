@@ -30,7 +30,7 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
-        assertEquals("0.3.6", response.at("/result/serverInfo/version").asText());
+        assertEquals("0.3.8", response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
     }
 
@@ -722,6 +722,7 @@ class McpJsonRpcHandlerTest {
                 """));
         assertTrue(columns.at("/result/structuredContent").toString().contains("smiles"));
         assertTrue(columns.at("/result/structuredContent").toString().contains("pIC50"));
+        assertTrue(columns.at("/result/structuredContent/3/raw/predictionWorkflowKey").isNull());
 
         JsonNode description = call(handler, request(12, "describe_prism_session_for_agent", """
                 {"session_id":"example_pack"}
@@ -1363,6 +1364,14 @@ class McpJsonRpcHandlerTest {
                 "{\"topic\":\"report_workflow\"}"));
         assertTrue(guide.at("/result/structuredContent/markdown").asText()
                 .contains("validate_prism_report"));
+    }
+
+    @Test
+    void internalErrorsWithoutExceptionMessagesStillReturnActionableDiagnostics() {
+        assertEquals(
+                "Unexpected NullPointerException while handling tool list_prism_columns.",
+                McpJsonRpcHandler.internalErrorMessage(
+                        "tool list_prism_columns", new NullPointerException()));
     }
 
     @Test

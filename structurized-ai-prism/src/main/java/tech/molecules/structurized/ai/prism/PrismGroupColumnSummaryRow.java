@@ -14,7 +14,7 @@ public record PrismGroupColumnSummaryRow(
         List<PrismRuntimeColumnValueSummary> columns
 ) {
     public PrismGroupColumnSummaryRow {
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        metadata = NullSafeMaps.immutableCopy(metadata);
         columns = columns == null ? List.of() : List.copyOf(columns);
     }
 }

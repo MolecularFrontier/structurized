@@ -99,7 +99,9 @@ final class PrismGroupingClusteringService {
                         "strategy", result.strategy(),
                         "threshold", result.threshold(),
                         "clusterCount", result.clusterCount(),
-                        "moleculeCount", result.moleculeCount()
+                        "moleculeCount", result.moleculeCount(),
+                        "structureColumnId", collection.structureColumnId(),
+                        "structureFormat", collection.structureFormat()
                 )
         );
         PrismClusteringSummary clusteringSummary = new PrismClusteringSummary(
@@ -121,7 +123,8 @@ final class PrismGroupingClusteringService {
                 analysisId,
                 label,
                 result,
-                publishColumns
+                publishColumns,
+                collection
         );
         PrismClusteringAnalysis artifact = new PrismClusteringAnalysis(
                 analysisSummary,
@@ -226,7 +229,8 @@ final class PrismGroupingClusteringService {
                                                     String analysisId,
                                                     String label,
                                                     SimilarityClusteringResult result,
-                                                    boolean publishColumns) {
+                                                    boolean publishColumns,
+                                                    PrismRowSetStructureCollection collection) {
         ArrayList<PrismGroup> groups = new ArrayList<>();
         ArrayList<PrismGroupMembership> memberships = new ArrayList<>();
         LinkedHashMap<String, Double> similarities = new LinkedHashMap<>();
@@ -262,7 +266,9 @@ final class PrismGroupingClusteringService {
                 "analysisId", analysisId,
                 "sourceRowSetId", sourceRowSet.id(),
                 "descriptor", result.descriptor(),
-                "threshold", result.threshold()
+                "threshold", result.threshold(),
+                "structureColumnId", collection.structureColumnId(),
+                "structureFormat", collection.structureFormat()
         );
         PrismGrouping grouping = new PrismGrouping(
                 analysisId,
