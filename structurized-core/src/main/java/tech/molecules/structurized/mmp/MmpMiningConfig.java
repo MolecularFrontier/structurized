@@ -12,6 +12,7 @@ public final class MmpMiningConfig {
     private final boolean allowMacrocycleRingCuts;
     private final int macrocycleMinRingSize;
     private final boolean allowMixedRingChainCutSets;
+    private final boolean allowHydrogenCuts;
     private final int minKeyHeavyAtoms;
     private final int minVariableHeavyAtoms;
     private final int maxVariableHeavyAtoms;
@@ -29,6 +30,7 @@ public final class MmpMiningConfig {
         this.allowMacrocycleRingCuts = builder.allowMacrocycleRingCuts;
         this.macrocycleMinRingSize = builder.macrocycleMinRingSize;
         this.allowMixedRingChainCutSets = builder.allowMixedRingChainCutSets;
+        this.allowHydrogenCuts = builder.allowHydrogenCuts;
         this.minKeyHeavyAtoms = builder.minKeyHeavyAtoms;
         this.minVariableHeavyAtoms = builder.minVariableHeavyAtoms;
         this.maxVariableHeavyAtoms = builder.maxVariableHeavyAtoms;
@@ -57,6 +59,7 @@ public final class MmpMiningConfig {
                 .allowMacrocycleRingCuts(allowMacrocycleRingCuts)
                 .macrocycleMinRingSize(macrocycleMinRingSize)
                 .allowMixedRingChainCutSets(allowMixedRingChainCutSets)
+                .allowHydrogenCuts(allowHydrogenCuts)
                 .minKeyHeavyAtoms(minKeyHeavyAtoms)
                 .minVariableHeavyAtoms(minVariableHeavyAtoms)
                 .maxVariableHeavyAtoms(maxVariableHeavyAtoms)
@@ -92,6 +95,8 @@ public final class MmpMiningConfig {
     public boolean allowMacrocycleRingCuts() { return allowMacrocycleRingCuts; }
     public int macrocycleMinRingSize() { return macrocycleMinRingSize; }
     public boolean allowMixedRingChainCutSets() { return allowMixedRingChainCutSets; }
+    /** Whether one-cut hydrogen replacement fragmentations (-H &lt;-&gt; -R) are enumerated. */
+    public boolean allowHydrogenCuts() { return allowHydrogenCuts; }
     public int minKeyHeavyAtoms() { return minKeyHeavyAtoms; }
     public int minVariableHeavyAtoms() { return minVariableHeavyAtoms; }
     public int maxVariableHeavyAtoms() { return maxVariableHeavyAtoms; }
@@ -109,6 +114,7 @@ public final class MmpMiningConfig {
         private boolean allowMacrocycleRingCuts = true;
         private int macrocycleMinRingSize = 10;
         private boolean allowMixedRingChainCutSets = false;
+        private boolean allowHydrogenCuts = false;
         private int minKeyHeavyAtoms = 6;
         private int minVariableHeavyAtoms = 1;
         private int maxVariableHeavyAtoms = 15;
@@ -125,6 +131,7 @@ public final class MmpMiningConfig {
         public Builder allowMacrocycleRingCuts(boolean allowMacrocycleRingCuts) { this.allowMacrocycleRingCuts = allowMacrocycleRingCuts; return this; }
         public Builder macrocycleMinRingSize(int macrocycleMinRingSize) { this.macrocycleMinRingSize = macrocycleMinRingSize; return this; }
         public Builder allowMixedRingChainCutSets(boolean allowMixedRingChainCutSets) { this.allowMixedRingChainCutSets = allowMixedRingChainCutSets; return this; }
+        public Builder allowHydrogenCuts(boolean allowHydrogenCuts) { this.allowHydrogenCuts = allowHydrogenCuts; return this; }
         public Builder minKeyHeavyAtoms(int minKeyHeavyAtoms) { this.minKeyHeavyAtoms = minKeyHeavyAtoms; return this; }
         public Builder minVariableHeavyAtoms(int minVariableHeavyAtoms) { this.minVariableHeavyAtoms = minVariableHeavyAtoms; return this; }
         public Builder maxVariableHeavyAtoms(int maxVariableHeavyAtoms) { this.maxVariableHeavyAtoms = maxVariableHeavyAtoms; return this; }

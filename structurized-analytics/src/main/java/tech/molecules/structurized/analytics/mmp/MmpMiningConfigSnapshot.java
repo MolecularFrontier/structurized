@@ -12,6 +12,7 @@ public record MmpMiningConfigSnapshot(
         double maxVariableToMolHeavyAtomFraction,
         int maxFragmentationRecordsPerCompound, int maxPairsPerKey,
         boolean emitReverseTransforms, int minTransformSupport,
+        boolean allowHydrogenCuts,
         String noCutRuleProfile
 ) {
     public static final String DEFAULT_NO_CUT_RULE_PROFILE = "structurized-default-v1";
@@ -35,6 +36,7 @@ public record MmpMiningConfigSnapshot(
                 config.minKeyHeavyAtoms(), config.minVariableHeavyAtoms(), config.maxVariableHeavyAtoms(),
                 config.maxVariableToMolHeavyAtomFraction(), config.maxFragmentationRecordsPerCompound(),
                 config.maxPairsPerKey(), config.emitReverseTransforms(), config.minTransformSupport(),
+                config.allowHydrogenCuts(),
                 DEFAULT_NO_CUT_RULE_PROFILE);
     }
 
@@ -47,6 +49,8 @@ public record MmpMiningConfigSnapshot(
                 .maxVariableToMolHeavyAtomFraction(maxVariableToMolHeavyAtomFraction)
                 .maxFragmentationRecordsPerCompound(maxFragmentationRecordsPerCompound)
                 .maxPairsPerKey(maxPairsPerKey).emitReverseTransforms(emitReverseTransforms)
-                .minTransformSupport(minTransformSupport).noCutBondRules(NoCutBondRules.defaultRules()).build();
+                .minTransformSupport(minTransformSupport)
+                .allowHydrogenCuts(allowHydrogenCuts)
+                .noCutBondRules(NoCutBondRules.defaultRules()).build();
     }
 }

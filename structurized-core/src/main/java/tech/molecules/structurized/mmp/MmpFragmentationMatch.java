@@ -36,7 +36,8 @@ public record MmpFragmentationMatch(
                 throw new IllegalArgumentException("attachment labels must be unique");
             }
             if (!keyAtomIndices.contains(attachment.keyAtomIndex())
-                    || !valueAtomIndices.contains(attachment.valueAtomIndex())) {
+                    || (!attachment.isHydrogenSite()
+                        && !valueAtomIndices.contains(attachment.valueAtomIndex()))) {
                 throw new IllegalArgumentException("attachment atoms must belong to their mapped partitions");
             }
         }
@@ -61,6 +62,13 @@ public record MmpFragmentationMatch(
             throw new IllegalArgumentException(field + " must not contain negative indices");
         }
         return normalized;
+    }
+
+    /**
+     * Returns true when this fragmentation replaces a hydrogen rather than a heavy-atom fragment.
+     */
+    public boolean isHydrogenCut() {
+        return MmpHydrogenValue.isHydrogen(record.valueIdcode());
     }
 
     /**

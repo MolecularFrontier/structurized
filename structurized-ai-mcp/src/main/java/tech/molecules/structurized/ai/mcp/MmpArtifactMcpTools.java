@@ -221,7 +221,12 @@ final class MmpArtifactMcpTools {
             stat.put("min_delta", stats.minDelta());
             stat.put("max_delta", stats.maxDelta());
             stat.put("positive_fraction", stats.positiveFraction());
-            if ("full".equals(detail)) stat.put("example_pairs", stats.examplePairs());
+            stat.put("up_count", stats.upCount());
+            stat.put("down_count", stats.downCount());
+            stat.put("tie_count", stats.tieCount());
+            stat.put("decided_count", stats.decidedCount());
+            stat.put("direction_testable", stats.isDirectionTestable());
+            if ("full".equals(detail)) stat.put("supporting_pairs", stats.supportingPairs());
             evidence.put(preference.runId(), stat);
         }
         row.put("endpoint_evidence", evidence);

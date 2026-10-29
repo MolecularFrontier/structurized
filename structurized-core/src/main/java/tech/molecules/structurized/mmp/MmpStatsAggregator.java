@@ -11,8 +11,6 @@ import java.util.Objects;
  * Aggregates numeric deltas for directed MMP transformations.
  */
 public final class MmpStatsAggregator {
-    private static final int MAX_EXAMPLE_PAIRS = 10;
-
     private MmpStatsAggregator() {}
 
     public static List<MmpTransformStats> aggregate(List<MmpPair> pairs, MmpMiningConfig config) {
@@ -51,7 +49,19 @@ public final class MmpStatsAggregator {
                     return centered * centered;
                 })
                 .sum() / deltas.size();
-        double positiveFraction = deltas.stream().filter(delta -> delta > 0.0).count() / (double) deltas.size();
+        int upCount = 0;
+        int downCount = 0;
+        int tieCount = 0;
+        for (double delta : deltas) {
+            if (delta > 0.0) {
+                upCount++;
+            } else if (delta < 0.0) {
+                downCount++;
+            } else {
+                tieCount++;
+            }
+        }
+        double positiveFraction = upCount / (double) deltas.size();
         MmpPair firstPair = pairs.getFirst();
         return new MmpTransformStats(
                 transformId,
@@ -65,7 +75,10 @@ public final class MmpStatsAggregator {
                 deltas.getFirst(),
                 deltas.getLast(),
                 positiveFraction,
-                pairs.stream().limit(MAX_EXAMPLE_PAIRS).toList()
+                upCount,
+                downCount,
+                tieCount,
+                pairs
         );
     }
 

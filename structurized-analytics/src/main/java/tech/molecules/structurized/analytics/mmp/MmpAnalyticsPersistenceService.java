@@ -32,6 +32,9 @@ public final class MmpAnalyticsPersistenceService {
         }
         for (MmpComputedEndpointStats computed : computation.endpointStats()) {
             statsRepository.saveStatsRun(computed.run(), computed.transformStats());
+            if (!computed.subjectValues().isEmpty()) {
+                statsRepository.saveSubjectValues(computed.run().runId(), computed.subjectValues());
+            }
         }
         return computation.summary();
     }

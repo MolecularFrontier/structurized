@@ -7,6 +7,7 @@ import com.actelion.research.chem.StereoMolecule;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tech.molecules.structurized.analytics.mmp.MmpAnalyticsHashes;
 import tech.molecules.structurized.analytics.mmp.MmpEndpointStatsRun;
 import tech.molecules.structurized.analytics.mmp.MmpRecommendationRequest;
 import tech.molecules.structurized.analytics.mmp.MmpRecommendationResult;
@@ -52,8 +53,11 @@ class MmpRecommendationPanelTest {
         Path database = tempDir.resolve("recommend-ui.sqlite");
         try (SqliteMmpAnalyticsRepository repository =
                      SqliteMmpAnalyticsRepository.open(database)) {
+            // The run must carry the hash of the mining config used to produce it, otherwise
+            // MmpRecommendationService rejects the request as configuration mismatch.
             repository.saveStatsRun(new MmpEndpointStatsRun(
-                    "primary", "solubility", "set", "universe", "hash", "stats",
+                    "primary", "solubility", "set", "universe",
+                    MmpAnalyticsHashes.mmpConfigHash(config), "stats",
                     Instant.parse("2026-08-06T10:00:00Z"), 2, 2, 2, stats.size(), null), stats);
         }
 

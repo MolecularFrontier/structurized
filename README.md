@@ -4,13 +4,13 @@ structurized
 Modular Java 23 Maven stack for cheminformatics and downstream analytics.
 
 Project coordinates:
-- Parent build: `tech.molecules:structurized:0.3.8`
-- Core module: `tech.molecules:structurized-core:0.3.8`
-- AI inspection module: `tech.molecules:structurized-ai-core:0.3.8`
-- AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.3.8`
-- AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.3.8`
-- Analytics module: `tech.molecules:structurized-analytics:0.3.8`
-- Workbench module: `tech.molecules:structurized-workbench:0.3.8`
+- Parent build: `tech.molecules:structurized:0.4.0`
+- Core module: `tech.molecules:structurized-core:0.4.0`
+- AI inspection module: `tech.molecules:structurized-ai-core:0.4.0`
+- AI Prism bridge module: `tech.molecules:structurized-ai-prism:0.4.0`
+- AI MCP adapter module: `tech.molecules:structurized-ai-mcp:0.4.0`
+- Analytics module: `tech.molecules:structurized-analytics:0.4.0`
+- Workbench module: `tech.molecules:structurized-workbench:0.4.0`
 
 Build
 -----

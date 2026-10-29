@@ -77,7 +77,12 @@ class MmpEndpointStatsComputationServiceTest {
                 assertTrue(repository.findStatsRun(run.runId()).isPresent());
                 List<MmpTransformStats> persistedStats = repository.listTransformStats(run.runId());
                 assertFalse(persistedStats.isEmpty());
-                assertTrue(persistedStats.stream().anyMatch(stats -> !stats.examplePairs().isEmpty()));
+                // listTransformStats omits pairs by design; they are fetched per transform.
+                MmpTransformStats first = persistedStats.getFirst();
+                assertTrue(first.supportingPairs().isEmpty());
+                assertFalse(repository.findEndpointPairs(run.runId(), first.transformId()).isEmpty());
+                assertEquals(first.supportCount(),
+                        repository.countEndpointPairs(run.runId(), first.transformId()));
             }
         }
     }

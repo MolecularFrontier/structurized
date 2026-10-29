@@ -231,7 +231,7 @@ public final class MmpEndpointStatsCalculator {
                 transformStats.size(),
                 "endpointName=" + endpoint.endpointName()
         );
-        return new MmpComputedEndpointStats(run, transformStats);
+        return new MmpComputedEndpointStats(run, transformStats, values);
     }
 
     private static List<MmpEndpointSnapshot> selectEndpoints(

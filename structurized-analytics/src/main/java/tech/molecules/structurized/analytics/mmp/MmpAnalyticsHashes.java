@@ -24,6 +24,7 @@ public final class MmpAnalyticsHashes {
                 "allowMacrocycleRingCuts=" + config.allowMacrocycleRingCuts(),
                 "macrocycleMinRingSize=" + config.macrocycleMinRingSize(),
                 "allowMixedRingChainCutSets=" + config.allowMixedRingChainCutSets(),
+                "allowHydrogenCuts=" + config.allowHydrogenCuts(),
                 "minKeyHeavyAtoms=" + config.minKeyHeavyAtoms(),
                 "minVariableHeavyAtoms=" + config.minVariableHeavyAtoms(),
                 "maxVariableHeavyAtoms=" + config.maxVariableHeavyAtoms(),

@@ -429,7 +429,21 @@ public final class MmpWorkbenchPanel extends JPanel {
             return;
         }
         MmpTransformStats stats = statsModel.statAt(statsTable.convertRowIndexToModel(selectedRow));
-        pairModel.setPairs(stats.examplePairs());
+        // Transform stats are listed without pairs, so the supporting pairs for the selected
+        // transform are fetched on demand. Every pair is persisted, not only a capped sample.
+        int selectedRunRow = runTable.getSelectedRow();
+        if (databasePath != null && selectedRunRow >= 0) {
+            MmpEndpointStatsRun run = runModel.runAt(runTable.convertRowIndexToModel(selectedRunRow));
+            try (SqliteMmpAnalyticsRepository repository =
+                         SqliteMmpAnalyticsRepository.openReadOnly(databasePath)) {
+                pairModel.setPairs(repository.findEndpointPairs(run.runId(), stats.transformId()));
+            } catch (Exception e) {
+                pairModel.setPairs(List.of());
+                statusLabel.setText("Failed to read supporting pairs: " + rootMessage(e));
+            }
+        } else {
+            pairModel.setPairs(stats.supportingPairs());
+        }
         chemistryDetail.showTransform(stats);
         if (pairModel.getRowCount() > 0) {
             pairTable.setRowSelectionInterval(0, 0);
