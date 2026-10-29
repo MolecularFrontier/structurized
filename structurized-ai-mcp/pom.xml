@@ -7,7 +7,7 @@
     <parent>
         <groupId>tech.molecules</groupId>
         <artifactId>structurized</artifactId>
-        <version>0.3.8</version>
+        <version>0.4.0</version>
     </parent>
 
     <artifactId>structurized-ai-mcp</artifactId>
