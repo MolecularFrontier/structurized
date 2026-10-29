@@ -50,6 +50,6 @@ class MmpChemistryDetailPanelTest {
 
     static MmpTransformStats stats(MmpPair pair) {
         return new MmpTransformStats(pair.transformId(), pair.fromValueIdcode(), pair.toValueIdcode(),
-                pair.cutCount(), 4, 1.5, 1.4, 0.2, 1.1, 1.8, 1.0, List.of(pair));
+                pair.cutCount(), 4, 1.5, 1.4, 0.2, 1.1, 1.8, 1.0, 4, 0, 0, List.of(pair));
     }
 }

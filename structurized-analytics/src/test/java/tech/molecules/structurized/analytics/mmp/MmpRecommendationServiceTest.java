@@ -44,7 +44,9 @@ class MmpRecommendationServiceTest {
                         stats.cutCount(), stats.supportCount(), -stats.meanDelta(),
                         -stats.medianDelta(), stats.standardDeviation(),
                         -stats.maxDelta(), -stats.minDelta(),
-                        1.0 - stats.positiveFraction(), stats.examplePairs()))
+                        stats.negativeFraction(),
+                        stats.downCount(), stats.upCount(), stats.tieCount(),
+                        stats.supportingPairs()))
                 .toList();
         Path database = tempDir.resolve("recommend.sqlite");
         try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.open(database)) {
@@ -71,7 +73,7 @@ class MmpRecommendationServiceTest {
             assertFalse(targetCandidate.attachments().isEmpty());
             assertTrue(result.diagnostics().applicationAttemptCount() > 0);
             assertEquals(result.candidates().size(), result.diagnostics().resultCount());
-            MmpPair example = targetCandidate.statsFor("primary").examplePairs().getFirst();
+            MmpPair example = targetCandidate.statsFor("primary").supportingPairs().getFirst();
             MmpPairStructureEvidence evidence = MmpPairStructureEvidence.reconstruct(example);
             assertNotNull(evidence.compoundAIdcode());
             assertNotNull(evidence.compoundBIdcode());
@@ -103,7 +105,7 @@ class MmpRecommendationServiceTest {
                     .allMatch(value -> value.fromValueIdcode().equals(wanted.fromValueIdcode())));
             assertEquals(List.of(wanted.transformId()),
                     byId.stream().map(MmpTransformStats::transformId).toList());
-            assertFalse(byId.getFirst().examplePairs().isEmpty());
+            assertFalse(byId.getFirst().supportingPairs().isEmpty());
         }
     }
 

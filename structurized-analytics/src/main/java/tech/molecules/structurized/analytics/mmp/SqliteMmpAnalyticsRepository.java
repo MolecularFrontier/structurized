@@ -198,9 +198,9 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             executeUpdate("delete from mmp_pair where universe_id = ?", universeId);
             try (PreparedStatement ps = connection.prepareStatement("""
                     insert into mmp_pair
-                    (universe_id, transform_id, compound_id_a, compound_id_b, value_a, value_b, delta,
+                    (universe_id, transform_id, compound_id_a, compound_id_b,
                      key_idcode, from_value_idcode, to_value_idcode, cut_count)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
                     """)) {
                 for (MmpPair pair : pairs == null ? List.<MmpPair>of() : pairs) {
                     bindPair(ps, universeId, pair);
@@ -214,7 +214,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
     @Override
     public List<MmpPair> listPairs(String universeId) {
         try (PreparedStatement ps = connection.prepareStatement("""
-                select compound_id_a, compound_id_b, value_a, value_b, delta, key_idcode,
+                select compound_id_a, compound_id_b, key_idcode,
                        from_value_idcode, to_value_idcode, transform_id, cut_count
                 from mmp_pair
                 where universe_id = ?
@@ -256,9 +256,52 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                     run.statsCount(),
                     run.metadata());
             executeUpdate("delete from mmp_endpoint_transform_stats where run_id = ?", run.runId());
-            executeUpdate("delete from mmp_endpoint_example_pair where run_id = ?", run.runId());
+            executeUpdate("delete from mmp_endpoint_pair where run_id = ?", run.runId());
             insertStats(run.runId(), stats == null ? List.of() : stats);
         });
+    }
+
+    @Override
+    public void saveSubjectValues(String runId, Map<String, Double> valuesBySubjectId) {
+        Objects.requireNonNull(runId, "runId");
+        Map<String, Double> values = valuesBySubjectId == null ? Map.of() : valuesBySubjectId;
+        runInTransaction(() -> {
+            executeUpdate("delete from mmp_endpoint_subject_value where run_id = ?", runId);
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    insert or replace into mmp_endpoint_subject_value (run_id, subject_id, value)
+                    values (?, ?, ?)
+                    """)) {
+                for (Map.Entry<String, Double> entry : values.entrySet()) {
+                    if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
+                        continue;
+                    }
+                    ps.setString(1, runId);
+                    ps.setString(2, entry.getKey());
+                    ps.setDouble(3, entry.getValue());
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+        });
+    }
+
+    @Override
+    public Map<String, Double> findSubjectValues(String runId) {
+        if (!hasTable("mmp_endpoint_subject_value")) return Map.of();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select subject_id, value from mmp_endpoint_subject_value where run_id = ?
+                """)) {
+            ps.setString(1, runId);
+            LinkedHashMap<String, Double> values = new LinkedHashMap<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    values.put(rs.getString("subject_id"), rs.getDouble("value"));
+                }
+            }
+            return Map.copyOf(values);
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to read MMP subject values for run " + runId, e);
+        }
     }
 
     @Override
@@ -316,10 +359,10 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     @Override
     public List<MmpTransformStats> listTransformStats(String runId) {
-        Map<String, List<MmpPair>> examplePairsByTransform = listExamplePairsByTransform(runId);
         try (PreparedStatement ps = connection.prepareStatement("""
                 select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
-                       mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
+                       mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction,
+                       up_count, down_count, tie_count
                 from mmp_endpoint_transform_stats
                 where run_id = ?
                 order by transform_id
@@ -328,21 +371,9 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             ArrayList<MmpTransformStats> stats = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    String transformId = rs.getString("transform_id");
-                    stats.add(new MmpTransformStats(
-                            transformId,
-                            rs.getString("from_value_idcode"),
-                            rs.getString("to_value_idcode"),
-                            rs.getInt("cut_count"),
-                            rs.getInt("support_count"),
-                            rs.getDouble("mean_delta"),
-                            rs.getDouble("median_delta"),
-                            rs.getDouble("standard_deviation"),
-                            rs.getDouble("min_delta"),
-                            rs.getDouble("max_delta"),
-                            rs.getDouble("positive_fraction"),
-                            examplePairsByTransform.getOrDefault(transformId, List.of())
-                    ));
+                    // Supporting pairs are not attached here: one run can hold millions of them.
+                    // Use findEndpointPairs for a specific transform.
+                    stats.add(readTransformStats(rs, List.of()));
                 }
             }
             return List.copyOf(stats);
@@ -367,7 +398,8 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
             String sql = """
                     select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
-                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
+                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction,
+                           up_count, down_count, tie_count
                     from mmp_endpoint_transform_stats
                     where run_id = ? and cut_count = ? and from_value_idcode in (%s)
                     order by transform_id
@@ -384,11 +416,22 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                         "failed to find MMP transform stats by source fragments for run " + runId, e);
             }
         }
-        return attachExamplePairs(runId, stats);
+        return attachSupportingPairs(runId, stats);
     }
 
     @Override
     public List<MmpTransformStats> findTransformStatsByIds(
+            String runId,
+            java.util.Set<String> transformIds
+    ) {
+        return attachSupportingPairs(runId, findTransformStatsByIdsWithoutPairs(runId, transformIds));
+    }
+
+    /**
+     * Raw by-ID stats lookup that never loads pairs. The pair loaders need transform identity, so
+     * they must not call the public variant, which would recurse back into pair loading.
+     */
+    private List<MmpTransformStats> findTransformStatsByIdsWithoutPairs(
             String runId,
             java.util.Set<String> transformIds
     ) {
@@ -399,7 +442,8 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
             String sql = """
                     select transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
-                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction
+                           mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction,
+                           up_count, down_count, tie_count
                     from mmp_endpoint_transform_stats
                     where run_id = ? and transform_id in (%s)
                     order by transform_id
@@ -415,7 +459,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                         "failed to find MMP transform stats by ID for run " + runId, e);
             }
         }
-        return attachExamplePairs(runId, stats);
+        return List.copyOf(stats);
     }
 
     private static MmpUniverse readUniverse(ResultSet rs) throws SQLException {
@@ -457,14 +501,15 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                  macrocycle_min_ring_size, allow_mixed_ring_chain_cut_sets, min_key_heavy_atoms,
                  min_variable_heavy_atoms, max_variable_heavy_atoms, max_variable_fraction,
                  max_fragmentation_records, max_pairs_per_key, emit_reverse_transforms,
-                 min_transform_support, no_cut_rule_profile)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 min_transform_support, allow_hydrogen_cuts, no_cut_rule_profile)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, configHash, config.maxCuts(), config.singleBondsOnly(), config.skipSmallRings(),
                 config.allowMacrocycleRingCuts(), config.macrocycleMinRingSize(),
                 config.allowMixedRingChainCutSets(), config.minKeyHeavyAtoms(), config.minVariableHeavyAtoms(),
                 config.maxVariableHeavyAtoms(), config.maxVariableToMolHeavyAtomFraction(),
                 config.maxFragmentationRecordsPerCompound(), config.maxPairsPerKey(),
-                config.emitReverseTransforms(), config.minTransformSupport(), config.noCutRuleProfile());
+                config.emitReverseTransforms(), config.minTransformSupport(),
+                config.allowHydrogenCuts(), config.noCutRuleProfile());
         });
     }
 
@@ -476,7 +521,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                        macrocycle_min_ring_size, allow_mixed_ring_chain_cut_sets, min_key_heavy_atoms,
                        min_variable_heavy_atoms, max_variable_heavy_atoms, max_variable_fraction,
                        max_fragmentation_records, max_pairs_per_key, emit_reverse_transforms,
-                       min_transform_support, no_cut_rule_profile
+                       min_transform_support, no_cut_rule_profile, allow_hydrogen_cuts
                 from mmp_mining_config where config_hash = ?
                 """)) {
             ps.setString(1, configHash);
@@ -486,7 +531,9 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                         rs.getInt(1), rs.getBoolean(2), rs.getBoolean(3), rs.getBoolean(4),
                         rs.getInt(5), rs.getBoolean(6), rs.getInt(7), rs.getInt(8), rs.getInt(9),
                         rs.getDouble(10), rs.getInt(11), rs.getInt(12), rs.getBoolean(13),
-                        rs.getInt(14), rs.getString(15)));
+                        rs.getInt(14),
+                        rs.getBoolean(16),
+                        rs.getString(15)));
             }
         } catch (SQLException e) {
             throw new IllegalStateException("failed to read MMP mining configuration " + configHash, e);
@@ -507,7 +554,8 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     private void validateReadableSchema() {
         for (String table : List.of("mmp_universe", "mmp_fragmentation_record", "mmp_pair",
-                "mmp_endpoint_stats_run", "mmp_endpoint_transform_stats", "mmp_endpoint_example_pair")) {
+                "mmp_endpoint_stats_run", "mmp_endpoint_transform_stats", "mmp_endpoint_pair",
+                "mmp_endpoint_subject_value")) {
             if (!hasTable(table)) {
                 close();
                 throw new IllegalArgumentException("not a readable MMP analytics artifact; missing table " + table);
@@ -515,8 +563,7 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         }
     }
 
-    private boolean hasTable(String table) {
-        try (PreparedStatement ps = connection.prepareStatement(
+    private boolean hasTable(String table) {        try (PreparedStatement ps = connection.prepareStatement(
                 "select 1 from sqlite_master where type = 'table' and name = ?")) {
             ps.setString(1, table);
             try (ResultSet rs = ps.executeQuery()) {
@@ -561,12 +608,13 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                       max_pairs_per_key integer not null,
                       emit_reverse_transforms integer not null,
                       min_transform_support integer not null,
+                      allow_hydrogen_cuts integer not null,
                       no_cut_rule_profile text not null
                     )
                     """);
             executeUpdate("""
-                    insert or ignore into mmp_artifact_metadata (metadata_key, metadata_value)
-                    values ('schema_version', '2')
+                    insert or replace into mmp_artifact_metadata (metadata_key, metadata_value)
+                    values ('schema_version', '4')
                     """);
             execute("""
                     create table if not exists mmp_universe (
@@ -607,9 +655,6 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                       transform_id text not null,
                       compound_id_a text not null,
                       compound_id_b text not null,
-                      value_a real,
-                      value_b real,
-                      delta real,
                       key_idcode text not null,
                       from_value_idcode text not null,
                       to_value_idcode text not null,
@@ -646,29 +691,38 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                       min_delta real not null,
                       max_delta real not null,
                       positive_fraction real not null,
+                      up_count integer not null,
+                      down_count integer not null,
+                      tie_count integer not null,
                       primary key (run_id, transform_id)
                     )
                     """);
             execute("""
-                    create table if not exists mmp_endpoint_example_pair (
+                    create table if not exists mmp_endpoint_subject_value (
+                      run_id text not null,
+                      subject_id text not null,
+                      value real not null,
+                      primary key (run_id, subject_id)
+                    )
+                    """);
+            // Every supporting pair of every transform, per endpoint run. This replaces the old
+            // capped example-pair table so that low-support transforms can be shown in full.
+            execute("""
+                    create table if not exists mmp_endpoint_pair (
                       run_id text not null,
                       transform_id text not null,
-                      ordinal integer not null,
                       compound_id_a text not null,
                       compound_id_b text not null,
-                      value_a real,
-                      value_b real,
-                      delta real,
                       key_idcode text not null,
-                      from_value_idcode text not null,
-                      to_value_idcode text not null,
-                      cut_count integer not null,
-                      primary key (run_id, transform_id, ordinal)
+                      value_a real not null,
+                      value_b real not null,
+                      delta real not null
                     )
                     """);
             execute("create index if not exists idx_mmp_pair_universe_transform on mmp_pair(universe_id, transform_id)");
             execute("create index if not exists idx_mmp_pair_universe_compounds on mmp_pair(universe_id, compound_id_a, compound_id_b)");
             execute("create index if not exists idx_mmp_stats_endpoint on mmp_endpoint_stats_run(endpoint_id, universe_id)");
+            execute("create index if not exists idx_mmp_endpoint_pair_transform on mmp_endpoint_pair(run_id, transform_id)");
         });
     }
 
@@ -676,14 +730,15 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         try (PreparedStatement statPs = connection.prepareStatement("""
                 insert into mmp_endpoint_transform_stats
                 (run_id, transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
-                 mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction,
+                 up_count, down_count, tie_count)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """);
              PreparedStatement pairPs = connection.prepareStatement("""
-                insert into mmp_endpoint_example_pair
-                (run_id, transform_id, ordinal, compound_id_a, compound_id_b, value_a, value_b, delta,
-                 key_idcode, from_value_idcode, to_value_idcode, cut_count)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insert into mmp_endpoint_pair
+                (run_id, transform_id, compound_id_a, compound_id_b, key_idcode,
+                 value_a, value_b, delta)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             for (MmpTransformStats stat : stats) {
                 statPs.setString(1, runId);
@@ -698,14 +753,23 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                 statPs.setDouble(10, stat.minDelta());
                 statPs.setDouble(11, stat.maxDelta());
                 statPs.setDouble(12, stat.positiveFraction());
+                statPs.setInt(13, stat.upCount());
+                statPs.setInt(14, stat.downCount());
+                statPs.setInt(15, stat.tieCount());
                 statPs.addBatch();
 
-                int ordinal = 0;
-                for (MmpPair pair : stat.examplePairs()) {
+                // Fragment identity and cut count live on the stats row and are not repeated per
+                // pair, which is what keeps the complete pair table affordable. key_idcode is kept
+                // because the constant part differs from pair to pair within one transform.
+                for (MmpPair pair : stat.supportingPairs()) {
                     pairPs.setString(1, runId);
                     pairPs.setString(2, stat.transformId());
-                    pairPs.setInt(3, ordinal++);
-                    bindPairColumns(pairPs, 4, pair);
+                    pairPs.setString(3, pair.compoundIdA());
+                    pairPs.setString(4, pair.compoundIdB());
+                    pairPs.setString(5, pair.keyIdcode());
+                    pairPs.setDouble(6, requireValue(pair.valueA(), "valueA", stat.transformId()));
+                    pairPs.setDouble(7, requireValue(pair.valueB(), "valueB", stat.transformId()));
+                    pairPs.setDouble(8, requireValue(pair.delta(), "delta", stat.transformId()));
                     pairPs.addBatch();
                 }
             }
@@ -714,78 +778,112 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         }
     }
 
-    private Map<String, List<MmpPair>> listExamplePairsByTransform(String runId) {
-        try (PreparedStatement ps = connection.prepareStatement("""
-                select compound_id_a, compound_id_b, value_a, value_b, delta, key_idcode,
-                       from_value_idcode, to_value_idcode, transform_id, cut_count
-                from mmp_endpoint_example_pair
-                where run_id = ?
-                order by transform_id, ordinal
-                """)) {
-            ps.setString(1, runId);
-            LinkedHashMap<String, ArrayList<MmpPair>> mutable = new LinkedHashMap<>();
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    MmpPair pair = readPair(rs);
-                    mutable.computeIfAbsent(pair.transformId(), ignored -> new ArrayList<>()).add(pair);
-                }
-            }
-            LinkedHashMap<String, List<MmpPair>> result = new LinkedHashMap<>();
-            mutable.forEach((transformId, pairs) -> result.put(transformId, List.copyOf(pairs)));
-            return Map.copyOf(result);
-        } catch (SQLException e) {
-            throw new IllegalStateException("failed to list MMP example pairs for run " + runId, e);
+    private static double requireValue(Double value, String field, String transformId) {
+        if (value == null) {
+            throw new IllegalArgumentException(
+                    "supporting pair of transform " + transformId + " has no " + field);
         }
+        return value;
     }
 
-    private List<MmpTransformStats> attachExamplePairs(
+    /**
+     * Attaches supporting pairs to a bounded set of transforms. Used by the targeted lookups that
+     * back recommendation evidence; {@link #listTransformStats(String)} deliberately does not do
+     * this because a run can hold millions of pairs.
+     */
+    private List<MmpTransformStats> attachSupportingPairs(
             String runId,
             List<MmpTransformStats> stats
     ) {
         if (stats.isEmpty()) return List.of();
-        java.util.Set<String> ids = stats.stream()
-                .map(MmpTransformStats::transformId)
-                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
-        Map<String, List<MmpPair>> examples = listExamplePairsByTransformIds(runId, ids);
-        return stats.stream()
-                .map(stat -> new MmpTransformStats(
-                        stat.transformId(), stat.fromValueIdcode(), stat.toValueIdcode(),
-                        stat.cutCount(), stat.supportCount(), stat.meanDelta(), stat.medianDelta(),
-                        stat.standardDeviation(), stat.minDelta(), stat.maxDelta(),
-                        stat.positiveFraction(),
-                        examples.getOrDefault(stat.transformId(), List.of())))
+        LinkedHashMap<String, MmpTransformStats> byId = new LinkedHashMap<>();
+        for (MmpTransformStats stat : stats) {
+            byId.put(stat.transformId(), stat);
+        }
+        Map<String, List<MmpPair>> pairs = findEndpointPairs(runId, byId.keySet());
+        return byId.values().stream()
+                .map(stat -> stat.withSupportingPairs(
+                        pairs.getOrDefault(stat.transformId(), List.of())))
                 .sorted(java.util.Comparator.comparing(MmpTransformStats::transformId))
                 .toList();
     }
 
-    private Map<String, List<MmpPair>> listExamplePairsByTransformIds(
+    @Override
+    public List<MmpPair> findEndpointPairs(String runId, String transformId, int limit, int offset) {
+        Objects.requireNonNull(runId, "runId");
+        Objects.requireNonNull(transformId, "transformId");
+        if (limit < 1 || offset < 0) {
+            throw new IllegalArgumentException("limit must be positive and offset non-negative");
+        }
+        Optional<MmpTransformStats> stat =
+                findTransformStatsByIdsWithoutPairs(runId, java.util.Set.of(transformId))
+                        .stream().findFirst();
+        if (stat.isEmpty()) return List.of();
+        MmpTransformStats identity = stat.get();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select transform_id, compound_id_a, compound_id_b, key_idcode,
+                       value_a, value_b, delta
+                from mmp_endpoint_pair
+                where run_id = ? and transform_id = ?
+                order by compound_id_a, compound_id_b
+                limit ? offset ?
+                """)) {
+            ps.setString(1, runId);
+            ps.setString(2, transformId);
+            ps.setInt(3, limit);
+            ps.setInt(4, offset);
+            ArrayList<MmpPair> pairs = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    pairs.add(readEndpointPair(rs, identity.fromValueIdcode(),
+                            identity.toValueIdcode(), identity.cutCount()));
+                }
+            }
+            return List.copyOf(pairs);
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "failed to read MMP endpoint pairs for run " + runId, e);
+        }
+    }
+
+    /** Loads all supporting pairs for a bounded set of transform IDs. */
+    private Map<String, List<MmpPair>> findEndpointPairs(
             String runId,
             java.util.Set<String> transformIds
     ) {
         List<String> ids = normalizedKeys(transformIds);
         if (ids.isEmpty()) return Map.of();
+        Map<String, MmpTransformStats> identities = new LinkedHashMap<>();
+        for (MmpTransformStats stat : findTransformStatsByIdsWithoutPairs(
+                runId, java.util.Set.copyOf(ids))) {
+            identities.put(stat.transformId(), stat);
+        }
         LinkedHashMap<String, ArrayList<MmpPair>> mutable = new LinkedHashMap<>();
         for (List<String> chunk : chunks(ids)) {
             String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
             String sql = """
-                    select compound_id_a, compound_id_b, value_a, value_b, delta, key_idcode,
-                           from_value_idcode, to_value_idcode, transform_id, cut_count
-                    from mmp_endpoint_example_pair
+                    select transform_id, compound_id_a, compound_id_b, key_idcode,
+                           value_a, value_b, delta
+                    from mmp_endpoint_pair
                     where run_id = ? and transform_id in (%s)
-                    order by transform_id, ordinal
+                    order by transform_id, compound_id_a, compound_id_b
                     """.formatted(placeholders);
             try (PreparedStatement ps = connection.prepareStatement(sql)) {
                 ps.setString(1, runId);
                 bindStrings(ps, 2, chunk);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        MmpPair pair = readPair(rs);
-                        mutable.computeIfAbsent(pair.transformId(), ignored -> new ArrayList<>()).add(pair);
+                        String transformId = rs.getString("transform_id");
+                        MmpTransformStats identity = identities.get(transformId);
+                        if (identity == null) continue;
+                        mutable.computeIfAbsent(transformId, ignored -> new ArrayList<>())
+                                .add(readEndpointPair(rs, identity.fromValueIdcode(),
+                                        identity.toValueIdcode(), identity.cutCount()));
                     }
                 }
             } catch (SQLException e) {
                 throw new IllegalStateException(
-                        "failed to find MMP example pairs for run " + runId, e);
+                        "failed to find MMP endpoint pairs for run " + runId, e);
             }
         }
         LinkedHashMap<String, List<MmpPair>> result = new LinkedHashMap<>();
@@ -793,9 +891,25 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
         return Map.copyOf(result);
     }
 
+    @Override
+    public int countEndpointPairs(String runId, String transformId) {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                select count(*) from mmp_endpoint_pair where run_id = ? and transform_id = ?
+                """)) {
+            ps.setString(1, runId);
+            ps.setString(2, transformId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "failed to count MMP endpoint pairs for run " + runId, e);
+        }
+    }
+
     private static MmpTransformStats readTransformStats(
             ResultSet rs,
-            List<MmpPair> examples
+            List<MmpPair> supportingPairs
     ) throws SQLException {
         return new MmpTransformStats(
                 rs.getString("transform_id"),
@@ -809,7 +923,42 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                 rs.getDouble("min_delta"),
                 rs.getDouble("max_delta"),
                 rs.getDouble("positive_fraction"),
-                examples);
+                rs.getInt("up_count"),
+                rs.getInt("down_count"),
+                rs.getInt("tie_count"),
+                supportingPairs);
+    }
+
+    /** Reads an endpoint-independent structural pair; value columns do not exist on mmp_pair. */
+    private static MmpPair readPair(ResultSet rs) throws SQLException {
+        return new MmpPair(
+                rs.getString("compound_id_a"),
+                rs.getString("compound_id_b"),
+                null,
+                null,
+                null,
+                rs.getString("key_idcode"),
+                rs.getString("from_value_idcode"),
+                rs.getString("to_value_idcode"),
+                rs.getString("transform_id"),
+                rs.getInt("cut_count"));
+    }
+
+    /** Reads one valued pair of an endpoint run, reconstructing the fragment identity from stats. */
+    private static MmpPair readEndpointPair(
+            ResultSet rs, String fromValueIdcode, String toValueIdcode, int cutCount
+    ) throws SQLException {
+        return new MmpPair(
+                rs.getString("compound_id_a"),
+                rs.getString("compound_id_b"),
+                rs.getDouble("value_a"),
+                rs.getDouble("value_b"),
+                rs.getDouble("delta"),
+                rs.getString("key_idcode"),
+                fromValueIdcode,
+                toValueIdcode,
+                rs.getString("transform_id"),
+                cutCount);
     }
 
     private static List<String> normalizedKeys(Iterable<String> values) {
@@ -840,34 +989,16 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
     private static void bindPair(PreparedStatement ps, String universeId, MmpPair pair) throws SQLException {
         ps.setString(1, universeId);
         ps.setString(2, pair.transformId());
-        bindPairColumns(ps, 3, pair);
+        bindStructuralPair(ps, 3, pair);
     }
 
-    private static void bindPairColumns(PreparedStatement ps, int offset, MmpPair pair) throws SQLException {
+    private static void bindStructuralPair(PreparedStatement ps, int offset, MmpPair pair) throws SQLException {
         ps.setString(offset, pair.compoundIdA());
         ps.setString(offset + 1, pair.compoundIdB());
-        setNullableDouble(ps, offset + 2, pair.valueA());
-        setNullableDouble(ps, offset + 3, pair.valueB());
-        setNullableDouble(ps, offset + 4, pair.delta());
-        ps.setString(offset + 5, pair.keyIdcode());
-        ps.setString(offset + 6, pair.fromValueIdcode());
-        ps.setString(offset + 7, pair.toValueIdcode());
-        ps.setInt(offset + 8, pair.cutCount());
-    }
-
-    private static MmpPair readPair(ResultSet rs) throws SQLException {
-        return new MmpPair(
-                rs.getString("compound_id_a"),
-                rs.getString("compound_id_b"),
-                getNullableDouble(rs, "value_a"),
-                getNullableDouble(rs, "value_b"),
-                getNullableDouble(rs, "delta"),
-                rs.getString("key_idcode"),
-                rs.getString("from_value_idcode"),
-                rs.getString("to_value_idcode"),
-                rs.getString("transform_id"),
-                rs.getInt("cut_count")
-        );
+        ps.setString(offset + 2, pair.keyIdcode());
+        ps.setString(offset + 3, pair.fromValueIdcode());
+        ps.setString(offset + 4, pair.toValueIdcode());
+        ps.setInt(offset + 5, pair.cutCount());
     }
 
     private void execute(String sql) throws SQLException {

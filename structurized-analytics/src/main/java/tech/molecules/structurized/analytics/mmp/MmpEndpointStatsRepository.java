@@ -1,8 +1,10 @@
 package tech.molecules.structurized.analytics.mmp;
 
+import tech.molecules.structurized.mmp.MmpPair;
 import tech.molecules.structurized.mmp.MmpTransformStats;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -10,13 +12,61 @@ import java.util.Set;
  * Persistence API for endpoint-specific MMP statistics.
  */
 public interface MmpEndpointStatsRepository {
+    /** Default page size for supporting-pair lookups. */
+    int DEFAULT_PAIR_PAGE_SIZE = 100;
+
     void saveStatsRun(MmpEndpointStatsRun run, List<MmpTransformStats> stats);
+
+    /**
+     * Stores the per-subject endpoint values backing one run.
+     *
+     * <p>Values are O(subjects) while pairs are O(pairs), and unlike the pair table they also allow
+     * a delta to be evaluated for a pair that was never mined.</p>
+     */
+    default void saveSubjectValues(String runId, Map<String, Double> valuesBySubjectId) {
+        // Optional capability; in-memory repositories may ignore it.
+    }
+
+    /** Returns the per-subject endpoint values for one run. */
+    default Map<String, Double> findSubjectValues(String runId) {
+        return Map.of();
+    }
 
     Optional<MmpEndpointStatsRun> findStatsRun(String runId);
 
     List<MmpEndpointStatsRun> listStatsRuns();
 
+    /**
+     * Lists transform statistics for one run <em>without</em> supporting pairs, because a run can
+     * hold millions of them. Use {@link #findEndpointPairs} for a specific transform.
+     */
     List<MmpTransformStats> listTransformStats(String runId);
+
+    /**
+     * Returns a page of supporting pairs for one transform, with real measured values and deltas.
+     * Every supporting pair is retained, so even single-pair transforms can be shown in full.
+     */
+    default List<MmpPair> findEndpointPairs(String runId, String transformId, int limit, int offset) {
+        return listTransformStats(runId).stream()
+                .filter(stats -> stats.transformId().equals(transformId))
+                .findFirst()
+                .map(stats -> stats.supportingPairs().stream().skip(offset).limit(limit).toList())
+                .orElseGet(List::of);
+    }
+
+    /** Returns a page of supporting pairs using {@link #DEFAULT_PAIR_PAGE_SIZE}. */
+    default List<MmpPair> findEndpointPairs(String runId, String transformId) {
+        return findEndpointPairs(runId, transformId, DEFAULT_PAIR_PAGE_SIZE, 0);
+    }
+
+    /** Returns the total number of supporting pairs stored for one transform. */
+    default int countEndpointPairs(String runId, String transformId) {
+        return listTransformStats(runId).stream()
+                .filter(stats -> stats.transformId().equals(transformId))
+                .findFirst()
+                .map(MmpTransformStats::supportCount)
+                .orElse(0);
+    }
 
     default List<MmpTransformStats> findTransformStatsBySourceFragments(
             String runId,

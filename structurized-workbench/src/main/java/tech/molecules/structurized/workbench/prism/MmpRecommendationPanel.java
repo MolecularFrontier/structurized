@@ -730,10 +730,10 @@ final class MmpRecommendationPanel extends JPanel {
                 return;
             }
             MmpTransformStats stats = candidate.statsFor(choice.run().runId());
-            List<MmpPairStructureEvidence> rows = stats == null ? List.of() : stats.examplePairs()
+            List<MmpPairStructureEvidence> rows = stats == null ? List.of() : stats.supportingPairs()
                     .stream().map(MmpPairStructureEvidence::reconstruct).toList();
             model.setRows(rows);
-            message.setText(rows.size() + " persisted examples");
+            message.setText(rows.size() + " supporting pairs");
         }
     }
 

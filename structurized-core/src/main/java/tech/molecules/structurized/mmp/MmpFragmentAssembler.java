@@ -34,6 +34,10 @@ public final class MmpFragmentAssembler {
                     "invalid key fragment: " + rootMessage(exception));
         }
 
+        if (MmpHydrogenValue.isHydrogen(valueIdcode)) {
+            return assembleHydrogen(key, keyConnectors, cutCount);
+        }
+
         StereoMolecule value;
         Map<Integer, Connector> valueConnectors;
         try {
@@ -44,7 +48,6 @@ public final class MmpFragmentAssembler {
                     MmpFragmentAssemblyStatus.INVALID_VALUE,
                     "invalid value fragment: " + rootMessage(exception));
         }
-
         try {
             StereoMolecule product = new StereoMolecule(key);
             int[] valueMap = product.addMolecule(value);
@@ -69,6 +72,44 @@ public final class MmpFragmentAssembler {
                 connectorAtoms.add(valueMap[valueConnector.connectorAtom()]);
             }
             connectorAtoms.forEach(product::markAtomForDeletion);
+            product.deleteMarkedAtomsAndBonds();
+            product.setFragment(false);
+            product.ensureHelperArrays(Molecule.cHelperCIP);
+            String validationProblem = validateProduct(product);
+            if (validationProblem != null) {
+                return MmpFragmentAssemblyAttempt.failed(
+                        MmpFragmentAssemblyStatus.INVALID_PRODUCT, validationProblem);
+            }
+            if (containsConnectorAtoms(product)) {
+                return MmpFragmentAssemblyAttempt.failed(
+                        MmpFragmentAssemblyStatus.INVALID_PRODUCT,
+                        "product still contains connector atoms");
+            }
+            return MmpFragmentAssemblyAttempt.assembled(new Canonizer(product).getIDCode());
+        } catch (RuntimeException exception) {
+            return MmpFragmentAssemblyAttempt.failed(
+                    MmpFragmentAssemblyStatus.INVALID_PRODUCT, rootMessage(exception));
+        }
+    }
+
+    /**
+     * Completes a hydrogen replacement by deleting the key connector. The freed valence becomes an
+     * implicit hydrogen, which keeps the product IDCode identical to the same molecule drawn without
+     * explicit hydrogens.
+     */
+    private static MmpFragmentAssemblyAttempt assembleHydrogen(
+            StereoMolecule key,
+            Map<Integer, Connector> keyConnectors,
+            int cutCount
+    ) {
+        if (cutCount != 1) {
+            return MmpFragmentAssemblyAttempt.failed(
+                    MmpFragmentAssemblyStatus.INVALID_VALUE,
+                    "hydrogen replacement is only defined for one-cut transforms");
+        }
+        try {
+            StereoMolecule product = new StereoMolecule(key);
+            product.markAtomForDeletion(keyConnectors.get(1).connectorAtom());
             product.deleteMarkedAtomsAndBonds();
             product.setFragment(false);
             product.ensureHelperArrays(Molecule.cHelperCIP);

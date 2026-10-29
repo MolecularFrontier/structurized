@@ -48,6 +48,16 @@ public final class MmpFragmenter {
             }
         }
 
+        // Hydrogen replacement sites are one-cut only; see MmpHydrogenValue for the rationale.
+        if (config.allowHydrogenCuts()) {
+            for (int atom : candidateHydrogenSites(mol, config)) {
+                addHydrogenRecord(input.compoundId(), mol, config, totalHeavyAtoms, atom, matches);
+                if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
+                    return List.copyOf(matches.values());
+                }
+            }
+        }
+
         if (config.maxCuts() >= 2) {
             for (int i = 0; i < candidateBonds.size(); i++) {
                 for (int j = i + 1; j < candidateBonds.size(); j++) {
@@ -91,8 +101,101 @@ public final class MmpFragmenter {
         return bonds;
     }
 
-    private static boolean isBasicEligibleBond(StereoMolecule mol, MmpMiningConfig config, int bond) {
-        int a1 = mol.getBondAtom(0, bond);
+    /**
+     * Returns heavy atoms carrying at least one implicit hydrogen that may be replaced by a substituent.
+     */
+    static List<Integer> candidateHydrogenSites(StereoMolecule mol, MmpMiningConfig config) {
+        List<Integer> atoms = new ArrayList<>();
+        for (int atom = 0; atom < mol.getAtoms(); atom++) {
+            if (mol.getAtomicNo(atom) <= 1) {
+                continue;
+            }
+            if (mol.getImplicitHydrogens(atom) <= 0) {
+                continue;
+            }
+            atoms.add(atom);
+        }
+        return atoms;
+    }
+
+    private static void addHydrogenRecord(
+            String compoundId,
+            StereoMolecule mol,
+            MmpMiningConfig config,
+            int totalHeavyAtoms,
+            int attachmentAtom,
+            Map<String, MmpFragmentationMatch> matches
+    ) {
+        BitSet keyAtoms = allAtoms(mol);
+        int keyHeavyAtoms = heavyAtomCount(mol, keyAtoms);
+        // The key is the whole molecule and the value is a hydrogen, so only the key size filter and
+        // the explicit hydrogen-cut opt-in apply. minVariableHeavyAtoms is bypassed by design: a real
+        // cut always yields at least one heavy atom, so lowering it globally would be misleading.
+        if (keyHeavyAtoms < config.minKeyHeavyAtoms()) {
+            return;
+        }
+        String keyIdcode = hydrogenCutKeyIdcode(mol, keyAtoms, attachmentAtom);
+        if (keyIdcode == null) {
+            return;
+        }
+
+        MmpFragmentationRecord record = new MmpFragmentationRecord(
+                compoundId,
+                1,
+                keyIdcode,
+                MmpHydrogenValue.SENTINEL,
+                keyHeavyAtoms,
+                0,
+                List.of(),
+                null
+        );
+        MmpFragmentationMatch match = new MmpFragmentationMatch(
+                record,
+                atomIndices(keyAtoms),
+                List.of(),
+                List.of(new MmpAttachment(
+                        1,
+                        MmpHydrogenValue.NO_INDEX,
+                        attachmentAtom,
+                        MmpHydrogenValue.NO_INDEX,
+                        Molecule.cBondTypeSingle))
+        );
+        // Topologically equivalent hydrogen positions canonicalize to the same key IDCode and are
+        // therefore collapsed here, so benzene contributes one site rather than six.
+        matches.putIfAbsent(record.canonicalRecordId(), match);
+    }
+
+    /**
+     * Builds the canonical key fragment for a hydrogen cut: the complete molecule plus an R1
+     * connector on the substitution site. Attaching the connector consumes one implicit hydrogen.
+     */
+    private static String hydrogenCutKeyIdcode(StereoMolecule mol, BitSet keyAtoms, int attachmentAtom) {
+        StereoMolecule fragment = new StereoMolecule();
+        boolean[] include = new boolean[mol.getAllAtoms()];
+        for (int atom = keyAtoms.nextSetBit(0); atom >= 0; atom = keyAtoms.nextSetBit(atom + 1)) {
+            include[atom] = true;
+        }
+        int[] oldToNew = new int[mol.getAllAtoms()];
+        Arrays.fill(oldToNew, -1);
+        mol.copyMoleculeByAtoms(fragment, include, true, oldToNew);
+
+        int mapped = oldToNew[attachmentAtom];
+        if (mapped < 0) {
+            return null;
+        }
+        int dummy = fragment.addAtom(0);
+        fragment.setAtomCustomLabel(dummy, "R1");
+        fragment.addBond(mapped, dummy, Molecule.cBondTypeSingle);
+        // A real cut drops atoms, which makes copyMoleculeByAtoms mark the key as a fragment and
+        // therefore suppress implicit hydrogens. A hydrogen cut copies every atom, so the flag must
+        // be set explicitly; otherwise the identical phenyl-R1 key would encode differently and
+        // would never group with the corresponding heavy-atom cut during pairing.
+        fragment.setFragment(true);
+        fragment.ensureHelperArrays(Molecule.cHelperRings);
+        return new Canonizer(fragment, Canonizer.ENCODE_ATOM_CUSTOM_LABELS).getIDCode();
+    }
+
+    private static boolean isBasicEligibleBond(StereoMolecule mol, MmpMiningConfig config, int bond) {        int a1 = mol.getBondAtom(0, bond);
         int a2 = mol.getBondAtom(1, bond);
         if (mol.getAtomicNo(a1) <= 1 || mol.getAtomicNo(a2) <= 1) {
             return false;

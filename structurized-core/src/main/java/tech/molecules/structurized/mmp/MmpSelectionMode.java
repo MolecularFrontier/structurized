@@ -9,13 +9,25 @@ public enum MmpSelectionMode {
         @Override
         public boolean accepts(MmpFragmentationMatch match, Set<Integer> selectedAtoms) {
             Set<Integer> selection = normalized(selectedAtoms);
-            return !selection.isEmpty() && selection.containsAll(match.valueAtomIndices());
+            if (selection.isEmpty()) {
+                return false;
+            }
+            if (match.isHydrogenCut()) {
+                // A hydrogen cut has no heavy value atoms, so containsAll() would accept every
+                // selection. Require the substitution site itself to be selected instead.
+                return match.touchesAnyAtom(selection);
+            }
+            return selection.containsAll(match.valueAtomIndices());
         }
     },
     EXACT_FRAGMENT("Exact fragment") {
         @Override
         public boolean accepts(MmpFragmentationMatch match, Set<Integer> selectedAtoms) {
             Set<Integer> selection = normalized(selectedAtoms);
+            if (match.isHydrogenCut()) {
+                // There is no variable fragment that a selection could equal.
+                return false;
+            }
             return !selection.isEmpty()
                     && selection.equals(new LinkedHashSet<>(match.valueAtomIndices()));
         }

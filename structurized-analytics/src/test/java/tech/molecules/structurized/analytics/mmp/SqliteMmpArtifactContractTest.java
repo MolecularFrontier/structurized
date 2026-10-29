@@ -31,7 +31,7 @@ class SqliteMmpArtifactContractTest {
         try (SqliteMmpAnalyticsRepository repository = SqliteMmpAnalyticsRepository.openReadOnly(artifact)) {
             MmpMiningConfig loaded = repository.findMiningConfig(hash).orElseThrow().toMiningConfig();
             assertEquals(hash, MmpAnalyticsHashes.mmpConfigHash(loaded));
-            assertEquals(2, repository.artifactSchemaVersion());
+            assertEquals(4, repository.artifactSchemaVersion());
             assertTrue(repository.listStatsRuns().isEmpty());
         }
 
