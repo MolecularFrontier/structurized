@@ -50,7 +50,7 @@ class McpJsonRpcHandlerTest {
         JsonNode response = call(handler, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
         JsonNode tools = response.at("/result/tools");
 
-        assertEquals(103, tools.size());
+        assertEquals(104, tools.size());
         assertTrue(hasTool(tools, "register_structure"));
         assertTrue(hasTool(tools, "inspect_structure"));
         assertTrue(hasTool(tools, "list_artifacts"));
@@ -73,6 +73,7 @@ class McpJsonRpcHandlerTest {
         assertTrue(hasTool(tools, "define_prism_endpoint_score"));
         assertTrue(hasTool(tools, "list_prism_endpoint_scores"));
         assertTrue(hasTool(tools, "export_prism_snapshot"));
+        assertTrue(hasTool(tools, "export_prism_bundle"));
         assertTrue(hasTool(tools, "get_prism_report_schema"));
         assertTrue(hasTool(tools, "validate_prism_report"));
         assertTrue(hasTool(tools, "publish_prism_report"));
@@ -1321,7 +1322,7 @@ class McpJsonRpcHandlerTest {
 
         JsonNode schema = call(handler, request(1, "get_prism_report_schema", "{}"));
         assertEquals(1, schema.at("/result/structuredContent/prismReportVersion").asInt());
-        assertEquals(7, schema.at("/result/structuredContent/blockTypes").size());
+        assertEquals(8, schema.at("/result/structuredContent/blockTypes").size());
         assertTrue(schema.at("/result/structuredContent/blockTypes").toString().contains("compound-cards"));
 
         var openArgs = mapper.createObjectNode();

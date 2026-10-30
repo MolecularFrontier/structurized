@@ -712,9 +712,11 @@ class InMemoryPrismBridgeServiceTest {
         TestContext ctx = context();
         ctx.prism.openDataset(new OpenPrismDatasetRequest(prismDataset(), "reports", "Report dataset"));
 
-        assertEquals(7, ctx.prism.getReportSchema().blockTypes().size());
+        assertEquals(8, ctx.prism.getReportSchema().blockTypes().size());
         assertTrue(ctx.prism.getReportSchema().blockTypes().stream()
                 .anyMatch(block -> block.type().equals("compound-cards")));
+        assertTrue(ctx.prism.getReportSchema().blockTypes().stream()
+                .anyMatch(block -> block.type().equals("structure-sketch")));
         PrismReportValidationSummary comparison = ctx.prism.validateReport(
                 "reports", PrismReportSource.inline(comparisonReport()));
         assertTrue(comparison.valid(), comparison.diagnostics().toString());

@@ -431,6 +431,17 @@ final class McpChemistryTools {
                         requiredString(args, "session_id"),
                         Path.of(requiredString(args, "output_path")),
                         optionalString(args, "title", null)));
+        add(result, "export_prism_bundle", "Writes a new PrismPack with one or more .prism.md reports embedded, so data and report travel as a single file that opens with the report already registered. Reports are validated first; existing files are never overwritten.", schema(
+                required("session_id", "output_path", "report_paths"),
+                prop("session_id", "string", "Managed Prism session ID."),
+                prop("output_path", "string", "New .prismpack output path; it must not already exist."),
+                arrayProp("report_paths", "string", "Existing .prism.md paths to embed."),
+                prop("title", "string", "Optional exported bundle title.")),
+                args -> prism.exportBundle(
+                        requiredString(args, "session_id"),
+                        stringList(args, "report_paths").stream().map(Path::of).toList(),
+                        Path.of(requiredString(args, "output_path")),
+                        optionalString(args, "title", null)));
         add(result, "get_prism_report_schema", "Returns the versioned .prism.md front matter, supported block fields, examples, and starter template.", schema(),
                 args -> prism.getReportSchema());
         add(result, "validate_prism_report", "Parses and validates a .prism.md report against the current live Prism session without changing it.", schema(
