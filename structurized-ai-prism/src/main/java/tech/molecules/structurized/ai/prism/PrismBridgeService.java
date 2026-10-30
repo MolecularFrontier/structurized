@@ -6,6 +6,7 @@ import tech.molecules.structurized.prism.report.PrismReportSchema;
 
 import java.util.List;
 import java.nio.file.Path;
+import java.util.Map;
 
 public interface PrismBridgeService {
     PrismDatasetSummary openDataset(OpenPrismDatasetRequest request);
@@ -37,6 +38,14 @@ public interface PrismBridgeService {
     List<PrismEndpointScoreSummary> listEndpointScores(String sessionId);
 
     PrismSnapshotExportResult exportSnapshot(String sessionId, Path outputPath, String title);
+
+    /**
+     * Exports a PrismPack with one or more {@code .prism.md} reports embedded, so that data and
+     * report travel as a single artifact. Each report is validated against the session first; a
+     * report with errors fails the whole export rather than producing a bundle that cannot be
+     * opened.
+     */
+    Map<String, Object> exportBundle(String sessionId, List<Path> reportPaths, Path outputPath, String title);
 
 
     PrismReportSchema getReportSchema();
