@@ -128,11 +128,18 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     @Override
     public List<MmpUniverse> listUniverses() {
+        return listUniverses(Integer.MAX_VALUE);
+    }
+
+    /** Bounded metadata read for capability discovery; does not load subjects or pairs. */
+    public List<MmpUniverse> listUniverses(int limit) {
+        if (limit < 1) throw new IllegalArgumentException("limit must be positive");
         try (PreparedStatement ps = connection.prepareStatement("""
                 select universe_id, name, subject_set_ids, mmp_config_hash, created_at, metadata
                 from mmp_universe
-                order by created_at desc, universe_id asc
+                order by created_at desc, universe_id asc limit ?
                 """)) {
+            ps.setInt(1, limit);
             ArrayList<MmpUniverse> universes = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -339,12 +346,19 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
 
     @Override
     public List<MmpEndpointStatsRun> listStatsRuns() {
+        return listStatsRuns(Integer.MAX_VALUE);
+    }
+
+    /** Bounded metadata read for capability discovery; does not load transform statistics. */
+    public List<MmpEndpointStatsRun> listStatsRuns(int limit) {
+        if (limit < 1) throw new IllegalArgumentException("limit must be positive");
         try (PreparedStatement ps = connection.prepareStatement("""
                 select run_id, endpoint_id, endpoint_subject_set_id, universe_id, mmp_config_hash,
                        stats_config_hash, created_at, subject_count, value_count, pair_count, stats_count, metadata
                 from mmp_endpoint_stats_run
-                order by created_at desc, run_id asc
+                order by created_at desc, run_id asc limit ?
                 """)) {
+            ps.setInt(1, limit);
             ArrayList<MmpEndpointStatsRun> runs = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -537,6 +551,21 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             }
         } catch (SQLException e) {
             throw new IllegalStateException("failed to read MMP mining configuration " + configHash, e);
+        }
+    }
+
+    /** Reads optional artifact header metadata through this already-open connection. */
+    public Optional<String> findArtifactMetadata(String key) {
+        Objects.requireNonNull(key, "key");
+        if (!hasTable("mmp_artifact_metadata")) return Optional.empty();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "select metadata_value from mmp_artifact_metadata where metadata_key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("failed to read MMP artifact metadata", e);
         }
     }
 

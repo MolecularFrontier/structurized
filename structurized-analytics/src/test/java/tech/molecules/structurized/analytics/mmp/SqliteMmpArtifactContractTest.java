@@ -14,6 +14,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SqliteMmpArtifactContractTest {
     @Test
+    void capabilityMetadataReadsAreBoundedAndReadOnly(@TempDir Path tempDir) throws Exception {
+        Path artifact=tempDir.resolve("metadata.sqlite");
+        var time=java.time.Instant.parse("2026-01-01T00:00:00Z");
+        try(var repository=SqliteMmpAnalyticsRepository.open(artifact)) {
+            for(String id:java.util.List.of("a","b")) {
+                repository.saveUniverse(new MmpUniverse(id,"Synthetic universe",java.util.List.of(),"synthetic-hash",time,null),java.util.List.of());
+                repository.saveStatsRun(new MmpEndpointStatsRun(id,id,"synthetic-set",id,"synthetic-hash","synthetic-stats",time,0,0,0,0,null),java.util.List.of());
+            }
+        }
+        byte[] before=Files.readAllBytes(artifact);
+        try(var repository=SqliteMmpAnalyticsRepository.openReadOnly(artifact)) {
+            assertEquals("4",repository.findArtifactMetadata("schema_version").orElseThrow());
+            assertTrue(repository.findArtifactMetadata("missing").isEmpty());
+            assertEquals(1,repository.listUniverses(1).size());assertEquals(2,repository.listUniverses().size());
+            assertEquals(1,repository.listStatsRuns(1).size());assertEquals(2,repository.listStatsRuns().size());
+            assertThrows(IllegalArgumentException.class,()->repository.listUniverses(0));
+            assertThrows(IllegalArgumentException.class,()->repository.listStatsRuns(0));
+        }
+        org.junit.jupiter.api.Assertions.assertArrayEquals(before,Files.readAllBytes(artifact));
+    }
+
+    @Test
     void persistsResolvedConfigAndReadsArtifactWithoutMutation(@TempDir Path tempDir) throws Exception {
         Path artifact = tempDir.resolve("mmp.sqlite");
         MmpMiningConfig config = MmpMiningConfig.defaults().toBuilder()

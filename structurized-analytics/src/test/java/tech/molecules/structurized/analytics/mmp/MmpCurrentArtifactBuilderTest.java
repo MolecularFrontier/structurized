@@ -92,7 +92,8 @@ class MmpCurrentArtifactBuilderTest {
         var queries=new MmpArtifactQueries();
         String run,transform;
         try(var repo=SqliteMmpAnalyticsRepository.openReadOnly(path)) {
-            run=repo.listStatsRuns().getFirst().runId();transform=repo.listTransformStats(run).getFirst().transformId();
+            run=repo.listStatsRuns().stream().filter(r->r.statsCount()>0).findFirst().orElseThrow().runId();
+            transform=repo.listTransformStats(run).getFirst().transformId();
         }
         for(String operation:List.of("universes","runs","fragments","transforms","pairs","neighbors")) {
             String selectedRun=Set.of("transforms","pairs","neighbors").contains(operation)?run:null;
