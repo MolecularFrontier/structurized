@@ -30,7 +30,7 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
-        assertEquals("0.4.1", response.at("/result/serverInfo/version").asText());
+        assertEquals("0.4.2-SNAPSHOT", response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
     }
 

@@ -309,3 +309,20 @@ mvn -pl structurized-analytics,structurized-ai-mcp -am test
 The contract and end-to-end tests cover persisted mining configuration, read-only
 artifact opening, artifact identity checks, legacy configuration validation, and
 generation of a product from an existing artifact.
+
+
+## Complete current-artifact builds (0.4.2-SNAPSHOT)
+
+Mining defaults no longer silently truncate pairs or fragmentation records. A zero
+`maxPairsPerKey` or `maxFragmentationRecordsPerCompound` means unlimited; a positive
+safety budget aborts when exceeded. Existing positive configurations remain readable
+but now fail rather than return incomplete evidence. UI/result pagination limits
+are independent. `MmpMiner.forEachPair` streams structural pairs to a consumer.
+
+`MmpCurrentArtifactBuilder` builds a disposable schema-v4 SQLite artifact from a
+materialized snapshot. It batches pair writes and computes exact per-endpoint
+statistics on disk, retaining supporting pairs below the statistics support threshold.
+Its Java memory usage still includes all input structures and fragmentation records.
+The caller owns temporary-file cleanup and atomic publication. `MmpArtifactQueries`
+provides bounded read-only catalog, fragmentation, transformation, pair, and neighbor
+queries. Effect queries require a run ID; build tokens reject stale pagination.

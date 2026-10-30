@@ -229,7 +229,7 @@ class MmpHydrogenCutTest {
                 extended.size() / (double) baseline);
 
         assertTrue(hydrogenRecords > 0, "expected hydrogen replacement sites");
-        assertTrue(extended.size() <= withHydrogen.maxFragmentationRecordsPerCompound(),
+        assertTrue(withHydrogen.maxFragmentationRecordsPerCompound() == 0 || extended.size() <= withHydrogen.maxFragmentationRecordsPerCompound(),
                 "hydrogen cuts must not exhaust the per-compound record cap");
         // Hydrogen sites are one-cut only, so growth must stay far below the quadratic blow-up
         // that including them in two-cut sets would cause.

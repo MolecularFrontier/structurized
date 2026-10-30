@@ -19,6 +19,13 @@ import java.util.Objects;
  * Enumerates canonical 1-cut and 2-cut MMP fragmentations for one molecule.
  */
 public final class MmpFragmenter {
+    private static void checkComplete(int size, MmpMiningConfig config) {
+        if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+        if (config.maxFragmentationRecordsPerCompound() > 0 && size > config.maxFragmentationRecordsPerCompound()) {
+            throw new IllegalStateException("Fragmentation safety limit exceeded; no complete result can be published");
+        }
+    }
+
     private MmpFragmenter() {}
 
     public static List<MmpFragmentationRecord> fragment(MmpInputCompound input, MmpMiningConfig config) {
@@ -43,18 +50,14 @@ public final class MmpFragmenter {
 
         for (int bond : candidateBonds) {
             addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{bond}, matches);
-            if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
-                return List.copyOf(matches.values());
-            }
+            checkComplete(matches.size(), config);
         }
 
         // Hydrogen replacement sites are one-cut only; see MmpHydrogenValue for the rationale.
         if (config.allowHydrogenCuts()) {
             for (int atom : candidateHydrogenSites(mol, config)) {
                 addHydrogenRecord(input.compoundId(), mol, config, totalHeavyAtoms, atom, matches);
-                if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
-                    return List.copyOf(matches.values());
-                }
+                checkComplete(matches.size(), config);
             }
         }
 
@@ -67,9 +70,7 @@ public final class MmpFragmenter {
                         continue;
                     }
                     addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{b1, b2}, matches);
-                    if (matches.size() >= config.maxFragmentationRecordsPerCompound()) {
-                        return List.copyOf(matches.values());
-                    }
+                    checkComplete(matches.size(), config);
                 }
             }
         }

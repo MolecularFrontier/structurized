@@ -30,72 +30,47 @@ public final class MmpMiner {
         return new MmpMiningResult(records, pairs, stats);
     }
 
-    private static List<MmpPair> buildPairs(
-            List<MmpFragmentationRecord> records,
-            Map<String, MmpInputCompound> inputById,
-            MmpMiningConfig config
-    ) {
-        Map<KeyGroup, List<MmpFragmentationRecord>> byKey = new HashMap<>();
-        for (MmpFragmentationRecord record : records) {
-            byKey.computeIfAbsent(new KeyGroup(record.cutCount(), record.keyIdcode()), ignored -> new ArrayList<>()).add(record);
-        }
-
+    private static List<MmpPair> buildPairs(List<MmpFragmentationRecord> records,
+            Map<String, MmpInputCompound> inputById, MmpMiningConfig config) {
         List<MmpPair> pairs = new ArrayList<>();
-        List<KeyGroup> sortedGroups = byKey.keySet().stream().sorted().toList();
-        for (KeyGroup group : sortedGroups) {
-            List<MmpFragmentationRecord> groupRecords = byKey.get(group).stream()
-                    .sorted(Comparator.comparing(MmpFragmentationRecord::compoundId)
-                            .thenComparing(MmpFragmentationRecord::valueIdcode))
-                    .toList();
-            int emittedForKey = 0;
-            for (int i = 0; i < groupRecords.size(); i++) {
-                for (int j = i + 1; j < groupRecords.size(); j++) {
-                    MmpFragmentationRecord a = groupRecords.get(i);
-                    MmpFragmentationRecord b = groupRecords.get(j);
-                    if (a.compoundId().equals(b.compoundId()) || a.valueIdcode().equals(b.valueIdcode())) {
-                        continue;
-                    }
-                    pairs.add(toPair(a, b, inputById));
-                    emittedForKey++;
-                    if (config.emitReverseTransforms()) {
-                        pairs.add(toPair(b, a, inputById));
-                        emittedForKey++;
-                    }
-                    if (emittedForKey >= config.maxPairsPerKey()) {
-                        break;
-                    }
-                }
-                if (emittedForKey >= config.maxPairsPerKey()) {
-                    break;
-                }
-            }
-        }
-        pairs.sort(Comparator.comparing(MmpPair::transformId)
-                .thenComparing(MmpPair::compoundIdA)
-                .thenComparing(MmpPair::compoundIdB)
-                .thenComparing(MmpPair::keyIdcode));
+        forEachPair(records, config, pair -> {
+            Double a = inputById.get(pair.compoundIdA()).value();
+            Double b = inputById.get(pair.compoundIdB()).value();
+            pairs.add(new MmpPair(pair.compoundIdA(), pair.compoundIdB(), a, b, null,
+                    pair.keyIdcode(), pair.fromValueIdcode(), pair.toValueIdcode(), pair.transformId(), pair.cutCount()));
+        });
+        pairs.sort(Comparator.comparing(MmpPair::transformId).thenComparing(MmpPair::compoundIdA)
+                .thenComparing(MmpPair::compoundIdB).thenComparing(MmpPair::keyIdcode));
         return pairs;
     }
 
-    private static MmpPair toPair(
-            MmpFragmentationRecord from,
-            MmpFragmentationRecord to,
-            Map<String, MmpInputCompound> inputById
-    ) {
-        Double valueA = inputById.get(from.compoundId()).value();
-        Double valueB = inputById.get(to.compoundId()).value();
-        return new MmpPair(
-                from.compoundId(),
-                to.compoundId(),
-                valueA,
-                valueB,
-                null,
-                from.keyIdcode(),
-                from.valueIdcode(),
-                to.valueIdcode(),
-                null,
-                from.cutCount()
-        );
+    /** Streams all structural pairs; never retains the quadratic pair list. Positive limits fail,
+     * rather than silently truncate. Zero limits mean unlimited. */
+    public static void forEachPair(List<MmpFragmentationRecord> records, MmpMiningConfig config,
+            java.util.function.Consumer<MmpPair> sink) {
+        Map<KeyGroup, List<MmpFragmentationRecord>> groups = new java.util.TreeMap<>();
+        for (var record : records) {
+            groups.computeIfAbsent(new KeyGroup(record.cutCount(), record.keyIdcode()), ignored -> new ArrayList<>()).add(record);
+        }
+        for (var group : groups.values()) {
+            group.sort(Comparator.comparing(MmpFragmentationRecord::compoundId).thenComparing(MmpFragmentationRecord::valueIdcode));
+            long emitted = 0;
+            for (int i = 0; i < group.size(); i++) {
+                for (int j = i + 1; j < group.size(); j++) {
+                    if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+                    var a = group.get(i); var b = group.get(j);
+                    if (a.compoundId().equals(b.compoundId()) || a.valueIdcode().equals(b.valueIdcode())) continue;
+                    emitted += config.emitReverseTransforms() ? 2 : 1;
+                    if (config.maxPairsPerKey() > 0 && emitted > config.maxPairsPerKey()) {
+                        throw new IllegalStateException("Pair safety limit exceeded; no complete result can be published");
+                    }
+                    sink.accept(new MmpPair(a.compoundId(), b.compoundId(), null, null, null,
+                            a.keyIdcode(), a.valueIdcode(), b.valueIdcode(), null, a.cutCount()));
+                    if (config.emitReverseTransforms()) sink.accept(new MmpPair(b.compoundId(), a.compoundId(), null, null, null,
+                            b.keyIdcode(), b.valueIdcode(), a.valueIdcode(), null, b.cutCount()));
+                }
+            }
+        }
     }
 
     private record KeyGroup(int cutCount, String keyIdcode) implements Comparable<KeyGroup> {

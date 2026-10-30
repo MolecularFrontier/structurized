@@ -84,8 +84,8 @@ public final class MmpMiningConfig {
         if (maxVariableToMolHeavyAtomFraction <= 0.0 || maxVariableToMolHeavyAtomFraction > 1.0) {
             throw new IllegalArgumentException("maxVariableToMolHeavyAtomFraction must be in (0, 1]");
         }
-        if (maxFragmentationRecordsPerCompound < 1 || maxPairsPerKey < 1 || minTransformSupport < 1) {
-            throw new IllegalArgumentException("count limits must be positive");
+        if (maxFragmentationRecordsPerCompound < 0 || maxPairsPerKey < 0 || minTransformSupport < 1) {
+            throw new IllegalArgumentException("safety limits must be non-negative (0 means unlimited); support must be positive");
         }
     }
 
@@ -101,7 +101,9 @@ public final class MmpMiningConfig {
     public int minVariableHeavyAtoms() { return minVariableHeavyAtoms; }
     public int maxVariableHeavyAtoms() { return maxVariableHeavyAtoms; }
     public double maxVariableToMolHeavyAtomFraction() { return maxVariableToMolHeavyAtomFraction; }
+    /** Zero is unlimited; exceeding a positive safety budget fails instead of truncating. */
     public int maxFragmentationRecordsPerCompound() { return maxFragmentationRecordsPerCompound; }
+    /** Directed emissions per constant-key/cut-count group. Zero is unlimited; positive budgets fail closed. */
     public int maxPairsPerKey() { return maxPairsPerKey; }
     public boolean emitReverseTransforms() { return emitReverseTransforms; }
     public int minTransformSupport() { return minTransformSupport; }
@@ -119,8 +121,8 @@ public final class MmpMiningConfig {
         private int minVariableHeavyAtoms = 1;
         private int maxVariableHeavyAtoms = 15;
         private double maxVariableToMolHeavyAtomFraction = 0.5;
-        private int maxFragmentationRecordsPerCompound = 500;
-        private int maxPairsPerKey = 200_000;
+        private int maxFragmentationRecordsPerCompound = 0;
+        private int maxPairsPerKey = 0;
         private boolean emitReverseTransforms = true;
         private int minTransformSupport = 2;
         private List<NoCutBondRule> noCutBondRules = NoCutBondRules.defaultRules();
