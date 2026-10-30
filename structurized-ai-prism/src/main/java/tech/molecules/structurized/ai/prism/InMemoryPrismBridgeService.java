@@ -67,6 +67,14 @@ import tech.molecules.structurized.prism.score.EndpointScoreDefinition;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.nio.file.Path;
+import tech.molecules.structurized.prism.report.PrismReportValidator;
+import tech.molecules.structurized.prism.report.PrismReportSeverity;
+import tech.molecules.structurized.prism.report.PrismReportRequirements;
+import tech.molecules.structurized.prism.report.PrismReportParser;
+import tech.molecules.structurized.prism.report.PrismReportDocument;
+import tech.molecules.structurized.prism.report.PrismReportDiagnostic;
+import tech.molecules.structurized.prism.report.PrismPackReports;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -342,6 +350,57 @@ public final class InMemoryPrismBridgeService implements PrismBridgeService {
         } catch (IOException | IllegalArgumentException exception) {
             throw new ChemOperationException("prism_snapshot_export_failed", exception.getMessage(), exception);
         }
+    }
+
+    @Override
+    public synchronized Map<String, Object> exportBundle(String sessionId, List<Path> reportPaths,
+                                                         Path outputPath, String title) {
+        ManagedPrismSession managed = session(sessionId);
+        ArrayList<tech.molecules.structurized.prism.pack.PrismPack.Attachment> attachments = new ArrayList<>();
+        ArrayList<String> reportIds = new ArrayList<>();
+        try {
+            for (Path reportPath : reportPaths == null ? List.<Path>of() : reportPaths) {
+                String source = Files.readString(reportPath);
+                PrismReportDocument parsed = new PrismReportParser().parse(source);
+                List<PrismReportDiagnostic> diagnostics =
+                        new PrismReportValidator().validate(parsed, managed.workspace());
+                if (diagnostics.stream().anyMatch(item -> item.severity() == PrismReportSeverity.ERROR)) {
+                    throw new ChemOperationException("prism_bundle_report_invalid",
+                            "report " + reportPath.getFileName() + " has validation errors: "
+                                    + diagnostics.stream()
+                                    .filter(item -> item.severity() == PrismReportSeverity.ERROR)
+                                    .map(PrismReportDiagnostic::displayMessage)
+                                    .reduce((a, b) -> a + "; " + b).orElse(""), null);
+                }
+                String reportId = parsed.metadata().id() == null
+                        ? fileStem(reportPath)
+                        : parsed.metadata().id();
+                attachments.add(PrismPackReports.attachmentFor(reportId, parsed.metadata().title(), source,
+                        PrismReportRequirements.describe(parsed, managed.workspace())));
+                reportIds.add(reportId);
+            }
+            PrismSnapshotExportResult result = PrismSnapshotExportService.export(
+                    managed.snapshot(), managed.workspace(), outputPath, title, "Structurized MCP", attachments);
+            LinkedHashMap<String, Object> output = new LinkedHashMap<>();
+            output.put("path", result.path().toString());
+            output.put("snapshotId", result.snapshotId());
+            output.put("rowCount", result.rowCount());
+            output.put("scoreIds", result.scoreIds());
+            output.put("derivedColumnIds", result.derivedColumnIds());
+            output.put("embeddedReportIds", List.copyOf(reportIds));
+            output.put("launchCommand",
+                    "java -cp <prismlite-swing classpath> "
+                            + "tech.molecules.structurized.prismlite.swing.PrismLiteApplication "
+                            + result.path());
+            return Map.copyOf(output);
+        } catch (IOException | IllegalArgumentException exception) {
+            throw new ChemOperationException("prism_bundle_export_failed", exception.getMessage(), exception);
+        }
+    }
+
+    private static String fileStem(Path path) {
+        String name = path.getFileName() == null ? "report" : path.getFileName().toString();
+        return name.toLowerCase().endsWith(".prism.md") ? name.substring(0, name.length() - 9) : name;
     }
 
     @Override
