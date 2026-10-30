@@ -34,8 +34,9 @@ public final class MmpCurrentArtifactBuilder {
                 records.addAll(MmpFragmenter.fragment(new MmpInputCompound(id, structures.get(id), null), config));
             }
             repository.replaceFragmentationRecords(universeId, records);
+            long[] pairCount = {0};
             c.setAutoCommit(false);
-            try (PreparedStatement ps = c.prepareStatement("insert into mmp_pair values (?,?,?,?,?,?,?,?)")) {
+            try (PreparedStatement ps = c.prepareStatement("insert into mmp_pair (universe_id, transform_id, compound_id_a, compound_id_b, key_idcode, from_value_idcode, to_value_idcode, cut_count) values (?,?,?,?,?,?,?,?)")) {
                 int[] batch = {0};
                 MmpMiner.forEachPair(records, config, pair -> {
                     try {
@@ -43,12 +44,25 @@ public final class MmpCurrentArtifactBuilder {
                         ps.setString(3, pair.compoundIdA()); ps.setString(4, pair.compoundIdB());
                         ps.setString(5, pair.keyIdcode()); ps.setString(6, pair.fromValueIdcode());
                         ps.setString(7, pair.toValueIdcode()); ps.setInt(8, pair.cutCount());
+                        pairCount[0]++;
                         ps.addBatch(); if (++batch[0] % 1000 == 0) ps.executeBatch();
                     } catch (SQLException e) { throw new IllegalStateException("Pair write failed", e); }
                 });
                 ps.executeBatch(); c.commit();
             }
             c.setAutoCommit(true);
+            execute(c, """
+                create table mmp_universe_counts (
+                  universe_id text primary key,
+                  compound_count integer not null,
+                  fragmentation_count integer not null,
+                  pair_count integer not null
+                )
+                """);
+            execute(c, """
+                insert into mmp_universe_counts (universe_id, compound_count, fragmentation_count, pair_count)
+                values (?, ?, ?, ?)
+                """, universeId, subjects.size(), records.size(), pairCount[0]);
             var endpointIds = new HashSet<String>();
             for (var endpoint : snapshot.endpoints()) {
                 checkCancelled();
@@ -62,6 +76,7 @@ public final class MmpCurrentArtifactBuilder {
                 repository.saveSubjectValues(run, endpoint.valuesBySubjectId());
                 execute(c, """
                     insert into mmp_endpoint_pair
+                    (run_id, transform_id, compound_id_a, compound_id_b, key_idcode, value_a, value_b, delta)
                     select ?, p.transform_id, p.compound_id_a, p.compound_id_b, p.key_idcode,
                            a.value, b.value, b.value-a.value from mmp_pair p
                     join mmp_endpoint_subject_value a on a.run_id=? and a.subject_id=p.compound_id_a
@@ -71,6 +86,9 @@ public final class MmpCurrentArtifactBuilder {
                 // Centered population variance matches MmpStatsAggregator; window median is exact.
                 execute(c, """
                     insert into mmp_endpoint_transform_stats
+                    (run_id, transform_id, from_value_idcode, to_value_idcode, cut_count, support_count,
+                     mean_delta, median_delta, standard_deviation, min_delta, max_delta, positive_fraction,
+                     up_count, down_count, tie_count)
                     with means as (
                       select transform_id, avg(delta) mean from mmp_endpoint_pair where run_id=? group by transform_id
                     ), ranked as (
@@ -97,7 +115,7 @@ public final class MmpCurrentArtifactBuilder {
             }
             execute(c, "create index if not exists idx_mmp_stats_support on mmp_endpoint_transform_stats(run_id,support_count desc,transform_id)");
             execute(c, "create index if not exists idx_mmp_pair_page on mmp_endpoint_pair(run_id,transform_id,compound_id_a,compound_id_b,key_idcode)");
-            execute(c, "insert into mmp_artifact_metadata values ('build_id',?)", UUID.randomUUID().toString());
+            execute(c, "insert into mmp_artifact_metadata (metadata_key, metadata_value) values ('build_id',?)", UUID.randomUUID().toString());
             execute(c, "create index if not exists idx_mmp_endpoint_pair_a on mmp_endpoint_pair(run_id,compound_id_a)");
             execute(c, "create index if not exists idx_mmp_endpoint_pair_b on mmp_endpoint_pair(run_id,compound_id_b)");
             execute(c, "create index if not exists idx_mmp_fragment_compound on mmp_fragmentation_record(compound_id)");

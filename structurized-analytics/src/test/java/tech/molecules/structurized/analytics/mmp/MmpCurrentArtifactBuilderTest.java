@@ -53,6 +53,61 @@ class MmpCurrentArtifactBuilderTest {
             for(var run:repo.listStatsRuns()){assertTrue(run.pairCount()>0);assertEquals(0,run.statsCount());}
         }
     }
+    @Test void universeCatalogueReadsStoredCountsWithoutReadingFactTables() throws Exception {
+        var path=dir.resolve("counts.sqlite");
+        new MmpCurrentArtifactBuilder().build(path,"test",fixture(),MmpMiningConfig.defaults());
+        var queries=new MmpArtifactQueries();
+        var page=queries.read(path,"universes",null,null,null,50,0,null);
+        @SuppressWarnings("unchecked") var rows=(List<Map<String,Object>>)page.get("rows");
+        assertEquals(1L,page.get("total"));assertEquals(1,rows.size());
+        try(var c=java.sql.DriverManager.getConnection("jdbc:sqlite:"+path);var statement=c.createStatement()) {
+            for(var table:Map.of("compound_count","mmp_universe_subject","fragmentation_count","mmp_fragmentation_record","pair_count","mmp_pair").entrySet()) {
+                try(var rs=statement.executeQuery("select count(*) from "+table.getValue())) {
+                    rs.next();assertEquals(rs.getLong(1),((Number)rows.getFirst().get(table.getKey())).longValue());
+                }
+            }
+            // Prove that neither the total nor the displayed counts depend on scanning facts.
+            statement.execute("drop table mmp_pair");
+            statement.execute("drop table mmp_fragmentation_record");
+            statement.execute("drop table mmp_universe_subject");
+        }
+        assertEquals(page,queries.read(path,"universes",null,null,null,50,0,null));
+        var empty=queries.read(path,"universes",null,null,null,50,1,null);
+        assertEquals(1L,empty.get("total"));assertEquals(List.of(),empty.get("rows"));
+    }
+
+    @Test void legacyArtifactsKeepTheirCatalogueUntilRebuilt() throws Exception {
+        var path=dir.resolve("legacy.sqlite");
+        new MmpCurrentArtifactBuilder().build(path,"test",fixture(),MmpMiningConfig.defaults());
+        var queries=new MmpArtifactQueries();var before=queries.read(path,"universes",null,null,null,50,0,null);
+        try(var c=java.sql.DriverManager.getConnection("jdbc:sqlite:"+path);var statement=c.createStatement()) {
+            statement.execute("drop table mmp_universe_counts");
+        }
+        assertEquals(before,queries.read(path,"universes",null,null,null,50,0,null));
+    }
+
+    @Test void filteredTotalsAndPaginationStayConsistent() throws Exception {
+        var path=dir.resolve("pages.sqlite");
+        new MmpCurrentArtifactBuilder().build(path,"test",fixture(),MmpMiningConfig.defaults());
+        var queries=new MmpArtifactQueries();
+        String run,transform;
+        try(var repo=SqliteMmpAnalyticsRepository.openReadOnly(path)) {
+            run=repo.listStatsRuns().getFirst().runId();transform=repo.listTransformStats(run).getFirst().transformId();
+        }
+        for(String operation:List.of("universes","runs","fragments","transforms","pairs","neighbors")) {
+            String selectedRun=Set.of("transforms","pairs","neighbors").contains(operation)?run:null;
+            String selectedTransform=Set.of("pairs","transforms").contains(operation)?transform:null;
+            var all=queries.read(path,operation,selectedRun,"sample-0",selectedTransform,500,0,null);
+            @SuppressWarnings("unchecked") var allRows=(List<Map<String,Object>>)all.get("rows");
+            assertEquals((long)allRows.size(),all.get("total"),operation);
+            var page=queries.read(path,operation,selectedRun,"sample-0",selectedTransform,1,1,null);
+            assertEquals(all.get("total"),page.get("total"),operation);
+            assertEquals(allRows.stream().skip(1).limit(1).toList(),page.get("rows"),operation);
+        }
+        assertEquals(0L,queries.read(path,"transforms",run,null,"missing",10,0,null).get("total"));
+        assertEquals(0L,queries.read(path,"neighbors",run,"missing",null,10,0,null).get("total"));
+    }
+
     @Test void safetyLimitsFailInsteadOfReturningIncompleteResults() throws Exception {
         assertThrows(IllegalStateException.class,()->new MmpCurrentArtifactBuilder().build(dir.resolve("small.sqlite"),"test",fixture(),
                 MmpMiningConfig.defaults().toBuilder().maxPairsPerKey(1).build()));

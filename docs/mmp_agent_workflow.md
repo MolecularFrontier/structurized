@@ -326,3 +326,10 @@ Its Java memory usage still includes all input structures and fragmentation reco
 The caller owns temporary-file cleanup and atomic publication. `MmpArtifactQueries`
 provides bounded read-only catalog, fragmentation, transformation, pair, and neighbor
 queries. Effect queries require a run ID; build tokens reject stale pagination.
+
+Current-artifact rebuilds persist universe compound/fragmentation/pair counts in
+`mmp_universe_counts`, so catalogue requests do not scan the fact tables. Older
+artifacts fall back to live catalogue counts until rebuilt. Page totals use explicit
+count statements with shared filter bindings. `MmpArtifactException.reason()`
+distinguishes unavailable builds, scope mismatch, replacement, invalid artifacts,
+and query failures without embedding transport-specific status codes.
