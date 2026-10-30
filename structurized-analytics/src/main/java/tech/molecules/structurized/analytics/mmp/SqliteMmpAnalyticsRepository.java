@@ -402,6 +402,13 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             int cutCount,
             java.util.Set<String> fromValueIdcodes
     ) {
+        return attachSupportingPairs(runId,findTransformSummariesBySourceFragments(runId,cutCount,fromValueIdcodes,Integer.MAX_VALUE));
+    }
+
+    @Override
+    public List<MmpTransformStats> findTransformSummariesBySourceFragments(
+            String runId,int cutCount,java.util.Set<String> fromValueIdcodes,int maxRows) {
+        if(maxRows<0)throw new IllegalArgumentException("maxRows must be non-negative");
         if (cutCount < 1 || cutCount > 2) {
             throw new IllegalArgumentException("cutCount must be 1 or 2");
         }
@@ -416,21 +423,26 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
                            up_count, down_count, tie_count
                     from mmp_endpoint_transform_stats
                     where run_id = ? and cut_count = ? and from_value_idcode in (%s)
-                    order by transform_id
+                    order by transform_id limit ?
                     """.formatted(placeholders);
             try (PreparedStatement ps = connection.prepareStatement(sql)) {
                 ps.setString(1, runId);
                 ps.setInt(2, cutCount);
                 bindStrings(ps, 3, chunk);
+                ps.setLong(3+chunk.size(),(long)maxRows-stats.size()+1);
                 try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) stats.add(readTransformStats(rs, List.of()));
+                    while (rs.next()) {
+                        if(Thread.currentThread().isInterrupted())throw new java.util.concurrent.CancellationException();
+                        if(stats.size()==maxRows)throw new MmpRecommendationLimitException(MmpRecommendationLimitException.Limit.TRANSFORM_STATISTICS);
+                        stats.add(readTransformStats(rs,List.of()));
+                    }
                 }
             } catch (SQLException e) {
                 throw new IllegalStateException(
                         "failed to find MMP transform stats by source fragments for run " + runId, e);
             }
         }
-        return attachSupportingPairs(runId, stats);
+        return List.copyOf(stats);
     }
 
     @Override
@@ -439,6 +451,20 @@ public final class SqliteMmpAnalyticsRepository implements MmpUniverseRepository
             java.util.Set<String> transformIds
     ) {
         return attachSupportingPairs(runId, findTransformStatsByIdsWithoutPairs(runId, transformIds));
+    }
+
+    @Override
+    public List<MmpTransformStats> findTransformSummariesByIds(String runId,java.util.Set<String> transformIds) {
+        return findTransformStatsByIdsWithoutPairs(runId,transformIds);
+    }
+
+    /** Installs a connection-local cooperative cancellation hook until this repository is closed. */
+    public void cancelQueriesWhen(java.util.function.BooleanSupplier cancelled) {
+        try {
+            org.sqlite.ProgressHandler.setHandler(connection,10_000,new org.sqlite.ProgressHandler() {
+                @Override protected int progress() { return cancelled.getAsBoolean()?1:0; }
+            });
+        } catch(SQLException e) { throw new IllegalStateException("failed to install query cancellation",e); }
     }
 
     /**

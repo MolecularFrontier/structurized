@@ -113,6 +113,7 @@ public final class MmpCurrentArtifactBuilder {
                       stats_count=(select count(*) from mmp_endpoint_transform_stats where run_id=?) where run_id=?
                     """, run, run, run);
             }
+            execute(c, "create index if not exists idx_mmp_stats_source on mmp_endpoint_transform_stats(run_id,cut_count,from_value_idcode,transform_id)");
             execute(c, "create index if not exists idx_mmp_stats_support on mmp_endpoint_transform_stats(run_id,support_count desc,transform_id)");
             execute(c, "create index if not exists idx_mmp_pair_page on mmp_endpoint_pair(run_id,transform_id,compound_id_a,compound_id_b,key_idcode)");
             execute(c, "insert into mmp_artifact_metadata (metadata_key, metadata_value) values ('build_id',?)", UUID.randomUUID().toString());

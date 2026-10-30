@@ -31,22 +31,37 @@ public final class MmpRecommendationService {
     }
 
     public MmpRecommendationResult recommend(MmpRecommendationRequest request) {
-        Objects.requireNonNull(request, "request");
+        return recommend(request,MmpRecommendationBudget.unlimited(),false);
+    }
+
+    /** Bounded provider path: statistics only, never eager example-pair loading. */
+    public MmpRecommendationResult recommend(MmpRecommendationRequest request,MmpRecommendationBudget budget) {
+        return recommend(request,budget,true);
+    }
+
+    private MmpRecommendationResult recommend(MmpRecommendationRequest request,MmpRecommendationBudget budget,boolean summariesOnly) {
+        Objects.requireNonNull(request,"request");Objects.requireNonNull(budget,"budget");budget.check();
         long started = System.nanoTime();
         validateRuns(request);
+        int[] graphSize;
+        try {graphSize=new IDCodeParser().getAtomAndBondCounts(request.inputIdcode(),new int[2]);}
+        catch(RuntimeException e) {throw new IllegalArgumentException("invalid input IDCode",e);}
+        budget.inputAtoms(graphSize[0]);budget.inputBonds(graphSize[1]);
         StereoMolecule input = parse(request.inputIdcode());
+        budget.inputAtoms(input.getAllAtoms());
         validateSelectedAtoms(input, request.selectedAtomIndices());
         String canonicalInput = new Canonizer(input).getIDCode();
 
         List<MmpFragmentationMatch> allMatches = MmpFragmenter.fragmentWithMapping(
-                new MmpInputCompound("query", input, null), request.miningConfig());
+                new MmpInputCompound("query", input, null), request.miningConfig(),budget::fragments);
         List<MmpFragmentationMatch> selectedMatches = allMatches.stream()
                 .filter(match -> request.selectionMode().accepts(
                         match, request.selectedAtomIndices()))
                 .toList();
 
-        ArrayList<ApplicationTask> tasks = primaryTasks(request, selectedMatches);
-        tasks.sort(taskComparator(request.primaryPreference().direction()));
+        ArrayList<ApplicationTask> tasks = primaryTasks(request, selectedMatches,budget,summariesOnly);
+        var comparator=taskComparator(request.primaryPreference().direction());
+        tasks.sort((a,b)->{budget.check();return comparator.compare(a,b);});
         int primaryTransformCount = (int) tasks.stream()
                 .map(task -> task.stats().transformId())
                 .distinct()
@@ -62,6 +77,7 @@ public final class MmpRecommendationService {
         while (taskIndex < tasks.size()
                 && attempts < request.maxApplicationAttempts()
                 && candidates.size() < request.maxResults()) {
+            budget.check();
             ApplicationTask task = tasks.get(taskIndex++);
             attempts++;
             MmpTransformDefinition transform = MmpTransformDefinition.from(task.stats());
@@ -97,9 +113,10 @@ public final class MmpRecommendationService {
                 .map(candidate -> candidate.transform().transformId())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         Map<String, Map<String, MmpTransformStats>> secondaryStats =
-                loadSecondaryStats(request, candidateTransformIds);
+                loadSecondaryStats(request, candidateTransformIds,budget,summariesOnly);
         ArrayList<MmpRecommendationCandidate> results = new ArrayList<>();
         for (PreliminaryCandidate candidate : candidates.values()) {
+            budget.check();
             LinkedHashMap<String, MmpTransformStats> statsByRun = new LinkedHashMap<>();
             for (MmpEndpointPreference preference : request.endpointPreferences()) {
                 MmpTransformStats stats = preference.runId().equals(request.primaryRunId())
@@ -113,6 +130,7 @@ public final class MmpRecommendationService {
                     candidate.sourceValueAtomIndices(), statsByRun));
         }
 
+        budget.check();
         Duration duration = Duration.ofNanos(Math.max(0L, System.nanoTime() - started));
         return new MmpRecommendationResult(results, new MmpRecommendationDiagnostics(
                 allMatches.size(), selectedMatches.size(), primaryTransformCount,
@@ -149,10 +167,11 @@ public final class MmpRecommendationService {
 
     private ArrayList<ApplicationTask> primaryTasks(
             MmpRecommendationRequest request,
-            List<MmpFragmentationMatch> matches
+            List<MmpFragmentationMatch> matches,MmpRecommendationBudget budget,boolean summariesOnly
     ) {
         ArrayList<ApplicationTask> tasks = new ArrayList<>();
         for (int cuts = 1; cuts <= request.miningConfig().maxCuts(); cuts++) {
+            budget.check();
             int cutCount = cuts;
             List<MmpFragmentationMatch> cutMatches = matches.stream()
                     .filter(match -> match.record().cutCount() == cutCount)
@@ -161,8 +180,10 @@ public final class MmpRecommendationService {
                     .map(match -> match.record().valueIdcode())
                     .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
             if (sources.isEmpty()) continue;
-            List<MmpTransformStats> stats = repository.findTransformStatsBySourceFragments(
-                    request.primaryRunId(), cutCount, sources);
+            List<MmpTransformStats> stats = summariesOnly
+                    ?repository.findTransformSummariesBySourceFragments(request.primaryRunId(),cutCount,sources,budget.remainingStatistics())
+                    :repository.findTransformStatsBySourceFragments(request.primaryRunId(),cutCount,sources);
+            budget.consumeStatistics(stats.size());
             Map<String, List<MmpTransformStats>> bySource = stats.stream()
                     .collect(java.util.stream.Collectors.groupingBy(
                             MmpTransformStats::fromValueIdcode,
@@ -171,6 +192,7 @@ public final class MmpRecommendationService {
             for (MmpFragmentationMatch match : cutMatches) {
                 for (MmpTransformStats stat :
                         bySource.getOrDefault(match.record().valueIdcode(), List.of())) {
+                    budget.tasks(tasks.size()+1);
                     tasks.add(new ApplicationTask(match, stat));
                 }
             }
@@ -180,14 +202,16 @@ public final class MmpRecommendationService {
 
     private Map<String, Map<String, MmpTransformStats>> loadSecondaryStats(
             MmpRecommendationRequest request,
-            Set<String> transformIds
+            Set<String> transformIds,MmpRecommendationBudget budget,boolean summariesOnly
     ) {
         LinkedHashMap<String, Map<String, MmpTransformStats>> byRun = new LinkedHashMap<>();
         for (MmpEndpointPreference preference : request.endpointPreferences()) {
             if (preference.runId().equals(request.primaryRunId())) continue;
-            Map<String, MmpTransformStats> stats = repository
-                    .findTransformStatsByIds(preference.runId(), transformIds)
-                    .stream()
+            budget.check();
+            var loaded=summariesOnly?repository.findTransformSummariesByIds(preference.runId(),transformIds)
+                    :repository.findTransformStatsByIds(preference.runId(),transformIds);
+            budget.consumeStatistics(loaded.size());
+            Map<String, MmpTransformStats> stats = loaded.stream()
                     .collect(java.util.stream.Collectors.toMap(
                             MmpTransformStats::transformId,
                             stat -> stat,

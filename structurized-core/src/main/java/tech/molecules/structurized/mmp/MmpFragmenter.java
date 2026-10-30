@@ -38,6 +38,13 @@ public final class MmpFragmenter {
      * Enumerates canonical fragmentations and retains their atom/bond mapping to the input molecule.
      */
     public static List<MmpFragmentationMatch> fragmentWithMapping(MmpInputCompound input, MmpMiningConfig config) {
+        return fragmentWithMapping(input,config,count->{});
+    }
+
+    /** Reports record growth and checkpoints during enumeration, including rejected two-cut sets. */
+    public static List<MmpFragmentationMatch> fragmentWithMapping(MmpInputCompound input, MmpMiningConfig config,
+            java.util.function.IntConsumer progress) {
+        Objects.requireNonNull(progress,"progress").accept(0);
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(config, "config");
 
@@ -51,6 +58,7 @@ public final class MmpFragmenter {
         for (int bond : candidateBonds) {
             addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{bond}, matches);
             checkComplete(matches.size(), config);
+            progress.accept(matches.size());
         }
 
         // Hydrogen replacement sites are one-cut only; see MmpHydrogenValue for the rationale.
@@ -58,12 +66,14 @@ public final class MmpFragmenter {
             for (int atom : candidateHydrogenSites(mol, config)) {
                 addHydrogenRecord(input.compoundId(), mol, config, totalHeavyAtoms, atom, matches);
                 checkComplete(matches.size(), config);
+                progress.accept(matches.size());
             }
         }
 
         if (config.maxCuts() >= 2) {
             for (int i = 0; i < candidateBonds.size(); i++) {
                 for (int j = i + 1; j < candidateBonds.size(); j++) {
+                    progress.accept(matches.size());
                     int b1 = candidateBonds.get(i);
                     int b2 = candidateBonds.get(j);
                     if (!isAllowedTwoCutSet(mol, config, b1, b2)) {
@@ -71,6 +81,7 @@ public final class MmpFragmenter {
                     }
                     addRecordsForCutSet(input.compoundId(), mol, config, totalHeavyAtoms, new int[]{b1, b2}, matches);
                     checkComplete(matches.size(), config);
+                    progress.accept(matches.size());
                 }
             }
         }

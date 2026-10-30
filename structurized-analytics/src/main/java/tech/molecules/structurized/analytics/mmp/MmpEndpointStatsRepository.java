@@ -91,4 +91,20 @@ public interface MmpEndpointStatsRepository {
                 .filter(stats -> ids.contains(stats.transformId()))
                 .toList();
     }
+    /** Summary-only, bounded lookup. Exceeding the bound aborts rather than biases ranking. */
+    default List<MmpTransformStats> findTransformSummariesBySourceFragments(
+            String runId,int cutCount,Set<String> sources,int maxRows) {
+        if(maxRows<0)throw new IllegalArgumentException("maxRows must be non-negative");
+        var rows=listTransformStats(runId).stream().filter(s->s.cutCount()==cutCount && sources.contains(s.fromValueIdcode()))
+                .limit((long)maxRows+1).map(s->s.withSupportingPairs(List.of())).toList();
+        if(rows.size()>maxRows)throw new MmpRecommendationLimitException(MmpRecommendationLimitException.Limit.TRANSFORM_STATISTICS);
+        return rows;
+    }
+
+    /** Summary-only evidence; no example pair loading. */
+    default List<MmpTransformStats> findTransformSummariesByIds(String runId,Set<String> ids) {
+        return listTransformStats(runId).stream().filter(s->ids.contains(s.transformId()))
+                .map(s->s.withSupportingPairs(List.of())).toList();
+    }
+
 }

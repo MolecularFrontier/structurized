@@ -333,3 +333,12 @@ artifacts fall back to live catalogue counts until rebuilt. Page totals use expl
 count statements with shared filter bindings. `MmpArtifactException.reason()`
 distinguishes unavailable builds, scope mismatch, replacement, invalid artifacts,
 and query failures without embedding transport-specific status codes.
+
+`MmpRecommendationService.recommend(request, budget)` is a bounded summary-only path
+for service use. It preserves the primary ranking and chemistry of `recommend(request)`
+but uses summary-only repository lookups rather than eagerly attaching examples.
+`MmpRecommendationBudget` adds atom/bond, fragmentation, statistics-row, task-count,
+cooperative deadline and cancellation checks. The SQLite summary lookup enforces its
+row bound across all source-fragment chunks; exceeding it aborts instead of truncating
+ranking evidence. Legacy recommendation calls retain their supporting-pair behavior.
+A repository-local SQLite progress hook can cooperate with the budget during queries.
