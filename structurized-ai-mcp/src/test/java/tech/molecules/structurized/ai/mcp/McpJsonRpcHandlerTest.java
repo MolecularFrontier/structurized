@@ -30,8 +30,26 @@ class McpJsonRpcHandlerTest {
         assertEquals("2.0", response.get("jsonrpc").asText());
         assertEquals("2024-11-05", response.at("/result/protocolVersion").asText());
         assertEquals("structurized-ai-mcp", response.at("/result/serverInfo/name").asText());
-        assertEquals("0.4.2-SNAPSHOT", response.at("/result/serverInfo/version").asText());
+        // Read from the same filtered resource the handler uses, rather than repeating the
+        // literal: a hardcoded version makes this test fail on every release and every
+        // snapshot bump, which is noise rather than a signal.
+        assertEquals(projectVersion(), response.at("/result/serverInfo/version").asText());
         assertTrue(response.at("/result/capabilities/tools").isObject());
+    }
+
+    /** The build version, as the handler resolves it from its own metadata resource. */
+    private static String projectVersion() throws Exception {
+        try (java.io.InputStream input =
+                     McpJsonRpcHandlerTest.class.getResourceAsStream("/structurized-ai-mcp.properties")) {
+            assertNotNull(input, "version metadata resource must be on the classpath");
+            java.util.Properties properties = new java.util.Properties();
+            properties.load(input);
+            String version = properties.getProperty("version");
+            assertNotNull(version, "version property must be present");
+            assertFalse(version.isBlank(), "version property must not be blank");
+            assertFalse(version.contains("${"), "version property must be resolved by resource filtering");
+            return version.trim();
+        }
     }
 
     @Test
